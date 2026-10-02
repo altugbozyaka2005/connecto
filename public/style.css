@@ -174,6 +174,7 @@ p { margin: 0; }
 .form-success[hidden] { display: none; }
 .verify-card { text-align: center; }
 .verify-card .form-intro { margin-top: 4px; }
+.verify-once { margin: -8px 0 20px; }
 .mail-icon { width: 72px; height: 72px; margin: 0 auto 16px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
 
 /* ---------- Account menu ---------- */

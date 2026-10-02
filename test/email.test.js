@@ -33,6 +33,28 @@ test('new accounts must confirm their email before matching', async () => {
   s2.close();
 });
 
+test('signing in to an unconfirmed account sends a fresh link only if the last one is old', async () => {
+  const db = require('../db');
+  const u = newUser();
+  await request(base, 'POST', '/api/auth/register', u);
+  const first = lastEmail(u.email, 'verify').token;
+
+  // Right after signup: no second email.
+  const soon = await request(base, 'POST', '/api/auth/login', { email: u.email, password: u.password });
+  assert.strictEqual(soon.body.verificationSent, false);
+  assert.strictEqual(lastEmail(u.email, 'verify').token, first);
+
+  // Pretend the link was sent 20 minutes ago (e.g. before email was working).
+  db.prepare("UPDATE email_tokens SET created_at = created_at - 1200000 WHERE purpose = 'verify'").run();
+  const later = await request(base, 'POST', '/api/auth/login', { email: u.email, password: u.password });
+  assert.strictEqual(later.body.verificationSent, true);
+  await new Promise((r) => setImmediate(r));
+  const fresh = lastEmail(u.email, 'verify').token;
+  assert.notStrictEqual(fresh, first);
+  assert.strictEqual((await request(base, 'POST', '/api/auth/verify-email', { token: first })).status, 400, 'old link replaced');
+  assert.strictEqual((await request(base, 'POST', '/api/auth/verify-email', { token: fresh })).status, 200);
+});
+
 test('resend verification requires sign-in and has a cooldown', async () => {
   const u = newUser();
   const reg = await request(base, 'POST', '/api/auth/register', u);

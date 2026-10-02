@@ -68,9 +68,9 @@ function consumeEmailToken(token, purpose) {
   return row.expires_at >= Date.now() ? row.user_id : null;
 }
 
-function recentlyEmailed(userId, purpose) {
+function recentlyEmailed(userId, purpose, withinMs = EMAIL_COOLDOWN_MS) {
   const row = db.prepare('SELECT created_at FROM email_tokens WHERE user_id = ? AND purpose = ?').get(userId, purpose);
-  return row && Date.now() - row.created_at < EMAIL_COOLDOWN_MS;
+  return !!row && Date.now() - row.created_at < withinMs;
 }
 
 async function sendVerification(user) {
@@ -343,7 +343,14 @@ function createAuthRouter({ onLogout = () => {}, onSessionsRevoked = () => {} } 
     if (user.banned_at) return res.status(403).json({ error: 'This account has been suspended for breaking the community guidelines.' });
     db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(Date.now(), user.id);
     setSessionCookie(req, res, createSession(user.id));
-    res.json({ user: selfView(user) });
+    // Still unconfirmed? Their old link may have expired or never arrived; send a fresh one
+    // (at most every 15 minutes) so they don't have to know about "Resend".
+    let verificationSent = false;
+    if (!user.email_verified_at && !recentlyEmailed(user.id, 'verify', 15 * 60 * 1000)) {
+      sendVerification(user).catch((err) => console.error('Verification email failed:', err.message));
+      verificationSent = true;
+    }
+    res.json({ user: selfView(user), verificationSent });
   });
 
   router.post('/logout', (req, res) => {

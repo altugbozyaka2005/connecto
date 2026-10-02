@@ -226,11 +226,15 @@
     e.preventDefault();
     const form = e.target;
     submitWith(form, async () => {
-      const { user } = await api('POST', '/api/auth/login', {
+      const { user, verificationSent } = await api('POST', '/api/auth/login', {
         email: form.elements.email.value,
         password: form.elements.password.value,
       });
       onSignedIn(user);
+      if (verificationSent) {
+        $('#verify-success').textContent = `We just sent a new confirmation link to ${user.email}.`;
+        $('#verify-success').hidden = false;
+      }
     });
   });
 
