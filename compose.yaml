@@ -1,0 +1,83 @@
+# Production stack for the VPS. Traefik (already running on the host, in /docker/traefik)
+# discovers these containers via their labels and handles HTTPS with Let's Encrypt.
+#
+# Secrets live in /docker/connecto/.env on the server (never in git):
+#   TURN_SECRET=...      shared with coturn; generated on first deploy
+#   SMTP_URL=...         e.g. smtps://resend:API_KEY@smtp.resend.com:465
+#   MAIL_FROM=...        e.g. Connecto <no-reply@connecto.clientchase.com>
+services:
+  connecto:
+    build: .
+    image: connecto:latest
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      TRUST_PROXY: "1"             # one hop: Traefik
+      DB_PATH: /data/connecto.db
+      APP_URL: https://${CONNECTO_DOMAIN:-connecto.clientchase.com}
+      TURN_HOST: ${TURN_PUBLIC_IP:-31.97.183.135}
+      TURN_TLS_HOST: ${TURN_DOMAIN:-turn.clientchase.com}
+      TURN_SECRET: ${TURN_SECRET:?TURN_SECRET must be set in .env}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-Connecto <no-reply@connecto.clientchase.com>}
+    volumes:
+      - connecto_data:/data
+    # No published ports: Traefik reaches the container directly over Docker's network.
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.connecto.rule=Host(`${CONNECTO_DOMAIN:-connecto.clientchase.com}`)
+      - traefik.http.routers.connecto.entrypoints=websecure
+      - traefik.http.routers.connecto.tls.certresolver=letsencrypt
+      - traefik.http.services.connecto.loadbalancer.server.port=3000
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    # Keep Connecto from starving n8n on the same box (and vice versa).
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    stop_grace_period: 10s
+
+  # TURN relay. Host networking: it needs the real public IP and a wide UDP port range.
+  turn:
+    image: coturn/coturn:4.18.0
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - -c
+      - /etc/coturn/turnserver.conf
+      - --static-auth-secret=${TURN_SECRET:?TURN_SECRET must be set in .env}
+    volumes:
+      - ./deploy/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    # "turns:" on 443: Traefik terminates TLS for turn.<domain> and forwards plain TCP to 3478.
+    labels:
+      - traefik.enable=true
+      - traefik.tcp.routers.turn.rule=HostSNI(`${TURN_DOMAIN:-turn.clientchase.com}`)
+      - traefik.tcp.routers.turn.entrypoints=websecure
+      - traefik.tcp.routers.turn.tls=true
+      - traefik.tcp.routers.turn.tls.certresolver=letsencrypt
+      - traefik.tcp.services.turn.loadbalancer.server.port=3478
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  connecto_data:

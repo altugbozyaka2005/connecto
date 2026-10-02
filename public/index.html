@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Connecto</title>
+  <meta name="description" content="Find people doing the same thing as you, right now." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='22' cy='32' r='16' fill='%23ff6b4a'/><circle cx='42' cy='32' r='16' fill='%236c5ce7' fill-opacity='.85'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- 1. Sign in / Create account -->
+    <section class="screen screen-center" id="screen-auth">
+      <div class="card auth-card">
+        <div class="logo" aria-hidden="true"><span></span><span></span></div>
+        <h1 class="brand">Connecto</h1>
+        <p class="tagline">Find someone doing the same thing as you, <em>right now</em>.</p>
+
+        <div class="tabs" role="tablist" id="auth-tabs">
+          <button type="button" role="tab" class="tab" id="tab-login" aria-selected="true" aria-controls="login-form">Sign in</button>
+          <button type="button" role="tab" class="tab" id="tab-register" aria-selected="false" aria-controls="register-form">Create account</button>
+        </div>
+
+        <form id="login-form" class="auth-form" novalidate>
+          <label class="field">
+            <span>Email</span>
+            <input name="email" type="email" autocomplete="email" required />
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <div class="password-wrap">
+              <input name="password" type="password" autocomplete="current-password" required />
+              <button type="button" class="reveal" aria-label="Show password">Show</button>
+            </div>
+          </label>
+          <p class="forgot-row"><button type="button" class="link-btn link-accent" data-goto="forgot">Forgot password?</button></p>
+          <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+          <p class="form-error" role="alert"></p>
+          <p class="switch-hint">New to Connecto? <button type="button" class="link-btn link-accent" data-goto="register">Create an account</button></p>
+        </form>
+
+        <form id="register-form" class="auth-form" novalidate hidden>
+          <div class="avatar-row">
+            <label class="avatar-picker" title="Add a profile picture">
+              <div class="avatar avatar-lg" id="avatar-preview"></div>
+              <span class="avatar-picker-badge" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9Zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>
+              </span>
+              <input type="file" id="avatar-input" accept="image/*" hidden />
+            </label>
+            <div class="avatar-row-text">
+              <strong>Profile photo</strong>
+              <p class="hint">Optional, but people are more likely to accept your requests with one.</p>
+              <small class="field-error" data-for="avatar"></small>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <label class="field">
+              <span>First name</span>
+              <input name="firstName" type="text" autocomplete="given-name" maxlength="50" required />
+              <small class="field-error" data-for="firstName"></small>
+            </label>
+            <label class="field">
+              <span>Last name</span>
+              <input name="lastName" type="text" autocomplete="family-name" maxlength="50" required />
+              <small class="field-error" data-for="lastName"></small>
+            </label>
+          </div>
+          <p class="hint hint-tight">Others will see your first name and last initial.</p>
+
+          <label class="field">
+            <span>Email</span>
+            <input name="email" type="email" autocomplete="email" maxlength="254" required />
+            <small class="field-error" data-for="email"></small>
+          </label>
+
+          <label class="field">
+            <span>Password</span>
+            <div class="password-wrap">
+              <input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required />
+              <button type="button" class="reveal" aria-label="Show password">Show</button>
+            </div>
+            <small class="field-hint">At least 8 characters, with a letter and a number.</small>
+            <small class="field-error" data-for="password"></small>
+          </label>
+
+          <div class="field-row">
+            <label class="field">
+              <span>Date of birth</span>
+              <input name="dateOfBirth" type="date" autocomplete="bday" required />
+              <small class="field-error" data-for="dateOfBirth"></small>
+            </label>
+            <label class="field">
+              <span>Gender <em>(optional)</em></span>
+              <select name="gender">
+                <option value="">Select…</option>
+                <option value="woman">Woman</option>
+                <option value="man">Man</option>
+                <option value="nonbinary">Non-binary</option>
+                <option value="other">Other</option>
+                <option value="prefer_not">Prefer not to say</option>
+              </select>
+              <small class="field-error" data-for="gender"></small>
+            </label>
+          </div>
+
+          <label class="check">
+            <input name="acceptTerms" type="checkbox" required />
+            <span>I'm 18 or older and agree to the community guidelines: be respectful, and no nudity, harassment or hate.</span>
+          </label>
+          <small class="field-error" data-for="acceptTerms"></small>
+
+          <button class="btn btn-primary btn-block" type="submit">Create account</button>
+          <p class="form-error" role="alert"></p>
+          <p class="switch-hint">Already have an account? <button type="button" class="link-btn link-accent" data-goto="login">Sign in</button></p>
+        </form>
+
+        <form id="forgot-form" class="auth-form" novalidate hidden>
+          <h2 class="form-title">Reset your password</h2>
+          <p class="form-intro">Enter the email you signed up with and we'll send you a link to choose a new password.</p>
+          <label class="field">
+            <span>Email</span>
+            <input name="email" type="email" autocomplete="email" required />
+          </label>
+          <button class="btn btn-primary btn-block" type="submit">Send reset link</button>
+          <p class="form-error" role="alert"></p>
+          <p class="form-success" role="status" hidden></p>
+          <p class="switch-hint"><button type="button" class="link-btn link-accent" data-goto="login">← Back to sign in</button></p>
+        </form>
+
+        <form id="reset-form" class="auth-form" novalidate hidden>
+          <h2 class="form-title">Choose a new password</h2>
+          <p class="form-intro">You'll be signed out on every other device.</p>
+          <label class="field">
+            <span>New password</span>
+            <div class="password-wrap">
+              <input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required />
+              <button type="button" class="reveal" aria-label="Show password">Show</button>
+            </div>
+            <small class="field-hint">At least 8 characters, with a letter and a number.</small>
+            <small class="field-error" data-for="password"></small>
+          </label>
+          <label class="field">
+            <span>Confirm new password</span>
+            <input name="confirm" type="password" autocomplete="new-password" maxlength="128" required />
+            <small class="field-error" data-for="confirm"></small>
+          </label>
+          <button class="btn btn-primary btn-block" type="submit">Save new password</button>
+          <p class="form-error" role="alert"></p>
+          <p class="switch-hint"><button type="button" class="link-btn link-accent" data-goto="forgot">Request a new link</button></p>
+        </form>
+      </div>
+    </section>
+
+    <!-- 1b. Confirm email -->
+    <section class="screen screen-center" id="screen-verify">
+      <div class="card auth-card verify-card">
+        <div class="mail-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Zm0 4-8 5-8-5V6l8 5 8-5v2Z"/></svg>
+        </div>
+        <h2 class="form-title">Check your inbox</h2>
+        <p class="form-intro">We sent a confirmation link to <strong id="verify-email"></strong>. Click it to start matching. This page continues automatically once you do.</p>
+        <button class="btn btn-primary btn-block" id="resend-btn" type="button">Resend email</button>
+        <p class="form-error" id="verify-error" role="alert"></p>
+        <p class="form-success" id="verify-success" role="status" hidden></p>
+        <p class="hint">Can't find it? Check your spam folder.</p>
+        <p class="switch-hint">Wrong email? <button type="button" class="link-btn link-accent logout-btn">Sign out and start over</button></p>
+      </div>
+    </section>
+
+    <!-- 2. Activity prompt -->
+    <section class="screen" id="screen-activity">
+      <header class="topbar">
+        <div class="brand-sm"><div class="logo logo-sm" aria-hidden="true"><span></span><span></span></div>Connecto</div>
+        <details class="account">
+          <summary class="me-pill" aria-label="Account menu">
+            <div class="avatar avatar-sm me-avatar"></div>
+            <span class="me-name"></span>
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m7 10 5 5 5-5z"/></svg>
+          </summary>
+          <div class="menu">
+            <p class="menu-email"></p>
+            <button type="button" class="menu-item change-photo-btn">Change photo</button>
+            <button type="button" class="menu-item logout-btn">Log out</button>
+          </div>
+        </details>
+      </header>
+      <main class="center-main">
+        <div class="prompt-wrap">
+          <p class="greeting" id="greeting"></p>
+          <h2 class="prompt-title">What are you doing<br />right now?</h2>
+          <form id="activity-form" autocomplete="off">
+            <div class="prompt-input">
+              <input id="activity-input" type="text" maxlength="140" placeholder="Studying for my calculus exam…" required />
+              <button class="btn btn-primary" type="submit">Find people</button>
+            </div>
+            <p class="form-error" id="activity-error" role="alert"></p>
+          </form>
+          <div class="chips" id="suggestions" aria-label="Suggestions"></div>
+        </div>
+      </main>
+    </section>
+
+    <!-- 3. Matches -->
+    <section class="screen" id="screen-matches">
+      <header class="topbar">
+        <div class="brand-sm"><div class="logo logo-sm" aria-hidden="true"><span></span><span></span></div>Connecto</div>
+        <details class="account">
+          <summary class="me-pill" aria-label="Account menu">
+            <div class="avatar avatar-sm me-avatar"></div>
+            <span class="me-name"></span>
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m7 10 5 5 5-5z"/></svg>
+          </summary>
+          <div class="menu">
+            <p class="menu-email"></p>
+            <button type="button" class="menu-item change-photo-btn">Change photo</button>
+            <button type="button" class="menu-item logout-btn">Log out</button>
+          </div>
+        </details>
+      </header>
+
+      <main class="matches-main">
+        <div class="status-card">
+          <div>
+            <p class="eyebrow">You're doing</p>
+            <p class="my-activity" id="my-activity"></p>
+          </div>
+          <button class="btn btn-ghost" id="change-activity-btn" type="button">Change</button>
+        </div>
+
+        <div class="matches-head">
+          <h2>Closest matches</h2>
+          <span class="live"><i></i><span id="online-count">0</span> online now</span>
+        </div>
+
+        <div class="grid" id="match-grid"></div>
+
+        <div class="empty" id="empty-state">
+          <div class="radar" aria-hidden="true"><span></span><span></span><span></span></div>
+          <h3>Looking for people…</h3>
+          <p>No one's doing something similar just yet. Keep this tab open — matches appear here the moment someone joins.</p>
+        </div>
+      </main>
+    </section>
+
+    <!-- 4. Meeting room -->
+    <section class="screen" id="screen-room">
+      <header class="topbar room-topbar">
+        <div class="room-title">
+          <p class="eyebrow">Together with <span id="peer-name"></span></p>
+          <p class="room-activity" id="room-activity"></p>
+        </div>
+        <button class="btn btn-ghost chat-toggle" id="chat-toggle" type="button">Chat <span class="dot" id="chat-dot" hidden></span></button>
+      </header>
+
+      <div class="room-body">
+        <div class="stage">
+          <div class="tile tile-remote">
+            <video id="remote-video" autoplay playsinline></video>
+            <div class="tile-placeholder" id="remote-placeholder">
+              <div class="avatar avatar-xl" id="peer-avatar"></div>
+              <p id="remote-status">Connecting…</p>
+            </div>
+            <span class="tile-label" id="remote-label"></span>
+          </div>
+          <div class="tile tile-local">
+            <video id="local-video" autoplay playsinline muted></video>
+            <div class="tile-placeholder" id="local-placeholder">
+              <div class="avatar avatar-md" id="local-avatar"></div>
+            </div>
+            <span class="tile-label">You</span>
+          </div>
+
+          <div class="controls">
+            <button class="ctrl" id="mic-btn" type="button" aria-pressed="true" title="Toggle microphone">
+              <svg viewBox="0 0 24 24" class="on"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg>
+              <svg viewBox="0 0 24 24" class="off"><path fill="currentColor" d="M19 11h-2c0 .74-.16 1.43-.43 2.06l1.47 1.47A6.9 6.9 0 0 0 19 11ZM15 11.17V5a3 3 0 0 0-5.94-.6L15 10.35v.82ZM4.27 3 3 4.27l6 6V11a3 3 0 0 0 4.52 2.59l1.49 1.49A5 5 0 0 1 7 11H5a7 7 0 0 0 6 6.92V21h2v-3.08c.9-.13 1.75-.43 2.52-.88L19.73 21 21 19.73 4.27 3Z"/></svg>
+            </button>
+            <button class="ctrl" id="cam-btn" type="button" aria-pressed="true" title="Toggle camera">
+              <svg viewBox="0 0 24 24" class="on"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4Z"/></svg>
+              <svg viewBox="0 0 24 24" class="off"><path fill="currentColor" d="M21 6.5 17 10.5V7a1 1 0 0 0-1-1H9.82L21 17.18V6.5ZM3.27 2 2 3.27 4.73 6H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12c.21 0 .39-.08.55-.18L19.73 21 21 19.73 3.27 2Z"/></svg>
+            </button>
+            <button class="ctrl ctrl-leave" id="leave-btn" type="button" title="Leave room">
+              <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85a1 1 0 0 1-1.41-.02L.29 13.08a1 1 0 0 1 0-1.41C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67a1 1 0 0 1 0 1.41l-2.48 2.47a1 1 0 0 1-1.41.02 11.3 11.3 0 0 0-2.67-1.85 1 1 0 0 1-.56-.9v-3.1A15.1 15.1 0 0 0 12 9Z"/></svg>
+              <span>Leave</span>
+            </button>
+          </div>
+        </div>
+
+        <aside class="chat" id="chat-panel">
+          <div class="chat-head">
+            <h3>Chat</h3>
+            <button class="link-btn chat-close" id="chat-close" type="button" aria-label="Close chat">✕</button>
+          </div>
+          <ol class="chat-log" id="chat-log"></ol>
+          <form class="chat-form" id="chat-form" autocomplete="off">
+            <input id="chat-input" type="text" maxlength="1000" placeholder="Say hi 👋" />
+            <button class="btn btn-primary" type="submit">Send</button>
+          </form>
+        </aside>
+      </div>
+    </section>
+  </div>
+
+  <input type="file" id="photo-change-input" accept="image/*" hidden />
+
+  <!-- Incoming requests / notices -->
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <template id="match-card-tpl">
+    <button class="match-card" type="button">
+      <div class="avatar avatar-lg"></div>
+      <div class="match-info">
+        <p class="match-name"></p>
+        <p class="match-activity"></p>
+      </div>
+      <div class="match-foot">
+        <span class="score"><span class="score-bar"><i></i></span><b></b></span>
+        <span class="match-cta"></span>
+      </div>
+    </button>
+  </template>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
