@@ -440,51 +440,120 @@
 
   // ---------- 3. Matches ----------
 
-  function renderMatches(matches) {
-    state.matches = matches;
+  state.people = [];
+  state.groups = [];
+  state.filter = 'all';
+
+  // Kept for callers that clear the list (e.g. after changing activity).
+  function renderMatches(people, groups = []) {
+    state.people = people;
+    state.groups = groups;
+    renderResults();
+  }
+
+  function renderResults() {
+    const { people, groups, filter } = state;
+    $('#n-all').textContent = people.length + groups.length || '';
+    $('#n-people').textContent = people.length || '';
+    $('#n-groups').textContent = groups.length || '';
+    const items = [
+      ...(filter !== 'groups' ? people.map((m) => ({ kind: 'person', m })) : []),
+      ...(filter !== 'people' ? groups.map((g) => ({ kind: 'group', m: g })) : []),
+    ].sort((a, b) => b.m.score - a.m.score);
     const grid = $('#match-grid');
     grid.textContent = '';
-    const tpl = $('#match-card-tpl');
-    for (const m of matches) {
-      const card = tpl.content.firstElementChild.cloneNode(true);
-      paintAvatar(card.querySelector('.avatar'), m.name, m.avatar);
-      card.querySelector('.name-text').textContent = m.name;
-      card.querySelector('.pill-friend').hidden = !m.friend;
-      card.querySelector('.match-meta').textContent = metaLine(m);
-      card.querySelector('.match-activity').textContent = m.activity;
-      card.querySelector('.match-bio').textContent = m.bio || '';
-      const chips = card.querySelector('.mini-chips');
-      const shared = new Set((m.shared || []).map((x) => x.toLowerCase()));
-      // Shared interests first, highlighted.
-      for (const i of [...(m.interests || [])].sort((a, b) => shared.has(b.toLowerCase()) - shared.has(a.toLowerCase()))) {
-        const c = document.createElement('span');
-        c.className = 'mini-chip' + (shared.has(i.toLowerCase()) ? ' shared' : '');
-        c.textContent = i;
-        if (shared.has(i.toLowerCase())) c.title = 'You both like this';
-        chips.append(c);
-      }
-      card.querySelector('.score-bar i').style.width = `${m.score}%`;
-      card.querySelector('.score b').textContent = `${m.score}%`;
-      const cta = card.querySelector('.match-cta');
-      if (m.requestedYou) {
-        card.dataset.state = 'requested-you';
-        cta.textContent = 'Wants to join you — accept';
-      } else if (m.requested) {
-        card.dataset.state = 'requested';
-        cta.textContent = 'Request sent · cancel';
-      } else {
-        cta.textContent = 'Send request →';
-      }
-      const hit = card.querySelector('.match-hit');
-      hit.setAttribute('aria-label', `${cta.textContent}: ${m.name}, ${m.activity}`);
-      hit.addEventListener('click', () => onMatchClick(m));
-      card.querySelector('.card-more').addEventListener('click', (e) => {
-        e.stopPropagation();
-        openCardMenu(e.currentTarget, m);
-      });
-      grid.append(card);
+    for (const it of items) grid.append(it.kind === 'group' ? groupCard(it.m) : personCard(it.m));
+    $('#empty-state').toggleAttribute('data-show', items.length === 0);
+    $('#empty-state h3').textContent = filter === 'groups' ? 'No open groups yet' : 'Looking for people…';
+    $('#empty-state p').textContent = filter === 'groups'
+      ? 'Nobody has opened a group for something similar yet. Start one and others can ask to join.'
+      : 'No one’s doing something similar just yet. Keep this tab open — matches appear here the moment someone joins.';
+  }
+
+  document.querySelectorAll('.filter-tabs .tab').forEach((t) => t.addEventListener('click', () => {
+    state.filter = t.dataset.filter;
+    document.querySelectorAll('.filter-tabs .tab').forEach((x) => x.setAttribute('aria-selected', String(x === t)));
+    renderResults();
+  }));
+
+  function groupCard(g) {
+    const card = $('#group-card-tpl').content.firstElementChild.cloneNode(true);
+    card.querySelector('.seat-count').textContent = `${g.count}/${g.capacity}`;
+    const dots = card.querySelector('.seat-dots');
+    for (let i = 0; i < g.capacity; i++) {
+      const d = document.createElement('i');
+      if (i < g.count) d.className = 'on';
+      dots.append(d);
     }
-    $('#empty-state').toggleAttribute('data-show', matches.length === 0);
+    const stack = card.querySelector('.avatar-stack');
+    for (const m of g.members.slice(0, 5)) {
+      const av = document.createElement('div');
+      av.className = 'avatar' + (m.friend ? ' friend' : '');
+      av.title = m.friend ? `${m.name} (friend)` : m.name;
+      paintAvatar(av, m.name, m.avatar);
+      stack.append(av);
+    }
+    card.querySelector('.group-activity').textContent = g.activity;
+    const friendsIn = g.members.filter((m) => m.friend).map((m) => m.name);
+    card.querySelector('.group-host').textContent = [`Hosted by ${g.hostName}`, friendsIn.length && `with your friend ${friendsIn.join(', ')}`].filter(Boolean).join(' · ');
+    card.querySelector('.score-bar i').style.width = `${g.score}%`;
+    card.querySelector('.score b').textContent = `${g.score}%`;
+    const cta = card.querySelector('.match-cta');
+    if (g.requested) {
+      card.dataset.state = 'requested';
+      cta.textContent = 'Asked to join · cancel';
+    } else {
+      cta.textContent = 'Ask to join →';
+    }
+    const hit = card.querySelector('.match-hit');
+    hit.setAttribute('aria-label', `${cta.textContent}: group of ${g.count} of ${g.capacity}, ${g.activity}`);
+    hit.addEventListener('click', async () => {
+      if (g.requested) return socket.emit('cancel-join', { roomId: g.id });
+      const res = await emit('join-request', { roomId: g.id });
+      if (res.error) toast({ title: 'Couldn’t ask to join', body: res.error });
+      else toast({ title: 'Asked to join', body: `${g.hostName} will let you in or decline within a minute.`, timeout: 3000 });
+    });
+    return card;
+  }
+
+  function personCard(m) {
+    const card = $('#match-card-tpl').content.firstElementChild.cloneNode(true);
+    paintAvatar(card.querySelector('.avatar'), m.name, m.avatar);
+    card.querySelector('.name-text').textContent = m.name;
+    card.querySelector('.pill-friend').hidden = !m.friend;
+    card.querySelector('.match-meta').textContent = metaLine(m);
+    card.querySelector('.match-activity').textContent = m.activity;
+    card.querySelector('.match-bio').textContent = m.bio || '';
+    const chips = card.querySelector('.mini-chips');
+    const shared = new Set((m.shared || []).map((x) => x.toLowerCase()));
+    // Shared interests first, highlighted.
+    for (const i of [...(m.interests || [])].sort((a, b) => shared.has(b.toLowerCase()) - shared.has(a.toLowerCase()))) {
+      const c = document.createElement('span');
+      c.className = 'mini-chip' + (shared.has(i.toLowerCase()) ? ' shared' : '');
+      c.textContent = i;
+      if (shared.has(i.toLowerCase())) c.title = 'You both like this';
+      chips.append(c);
+    }
+    card.querySelector('.score-bar i').style.width = `${m.score}%`;
+    card.querySelector('.score b').textContent = `${m.score}%`;
+    const cta = card.querySelector('.match-cta');
+    if (m.requestedYou) {
+      card.dataset.state = 'requested-you';
+      cta.textContent = 'Wants to join you — accept';
+    } else if (m.requested) {
+      card.dataset.state = 'requested';
+      cta.textContent = 'Request sent · cancel';
+    } else {
+      cta.textContent = 'Send request →';
+    }
+    const hit = card.querySelector('.match-hit');
+    hit.setAttribute('aria-label', `${cta.textContent}: ${m.name}, ${m.activity}`);
+    hit.addEventListener('click', () => onMatchClick(m));
+    card.querySelector('.card-more').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openCardMenu(e.currentTarget, m);
+    });
+    return card;
   }
 
   async function onMatchClick(m) {
@@ -497,9 +566,9 @@
     else if (!res.matched) toast({ title: `Request sent to ${m.name}`, body: 'We’ll let you know when they respond.', timeout: 2500 });
   }
 
-  socket.on('matches', ({ matches, online }) => {
+  socket.on('matches', ({ matches, groups, online }) => {
     $('#online-count').textContent = Math.max(0, online - 1);
-    if (!state.room) renderMatches(matches);
+    if (!state.room) renderMatches(matches, groups || []);
   });
 
   socket.on('incoming-request', ({ from, score, friend }) => {
@@ -545,56 +614,208 @@
     });
   });
 
-  // ---------- 4. Meeting room ----------
+  // ---------- 4. Meeting room (1:1 and groups up to 5) ----------
+  //
+  // Everyone in a room connects directly to everyone else (one RTCPeerConnection per person).
+  // The server tells the later joiner of each pair to make the offer ('connect-peer').
 
   // Fallback if the server sends no ICE servers; normally room-start includes STUN + TURN.
   const DEFAULT_ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
-  let pc = null;
   let localStream = null;
-  let pendingCandidates = [];
-  let peerReady = false;
-  let localReady = false;
+  let iceServers = DEFAULT_ICE;
+  const peers = new Map(); // memberId -> { pc, stream, tile, pending: [], camOn, hasVideo }
   let unread = 0;
-  let remoteHasVideo = false;
-  let remoteCamOn = true;
+
+  const others = () => (state.room?.members || []).filter((m) => m.id !== socket.id);
+  const memberById = (id) => state.room?.members.find((m) => m.id === id);
 
   socket.on('room-start', async (room) => {
-    state.room = room;
     clearIncoming();
+    closeAllPeers();
+    iceServers = room.iceServers || DEFAULT_ICE;
+    state.room = room;
+    state.friendRequested = false;
+    state.lastPeer = null;
     unread = 0;
     $('#chat-dot').hidden = true;
     $('#chat-log').textContent = '';
-    $('#peer-name').textContent = room.peer.name;
-    $('#remote-label').textContent = room.peer.name;
-    // A friend invite can start a call before either person has typed an activity.
-    const acts = [...new Set([state.activity, room.peer.activity].filter(Boolean))];
-    $('#room-activity').textContent = acts.join('  ·  ') || 'Hanging out';
-    state.friendRequested = false;
-    $('#add-friend-btn').hidden = !!room.peer.friend;
-    $('#add-friend-btn').disabled = false;
-    $('#add-friend-btn').textContent = 'Add friend';
-    paintAvatar($('#peer-avatar'), room.peer.name, room.peer.avatar);
+    $('#tiles').textContent = '';
     paintAvatar($('#local-avatar'), state.user.displayName, state.user.avatar);
-    $('#remote-status').textContent = 'Connecting…';
-    $('#remote-placeholder').hidden = false;
-    const peer = room.peer;
+    const o = others();
+    if (!o.length) systemMessage('Your group room is open. People doing something similar can ask to join. You decide who gets in.');
+    else if (o.length === 1) introduce(o[0]);
+    else systemMessage(`You joined a group call with ${o.map((m) => m.name).join(', ')}.`);
+    renderRoom();
+    show('screen-room');
+    await startLocalMedia();
+    if (state.room) socket.emit('media-ready');
+  });
+
+  function introduce(peer) {
     systemMessage(peer.friend
       ? `You're in a call with your friend ${peer.name}.`
       : `You matched with ${peer.name}! They're doing “${peer.activity}”.`);
     const about = [peer.city && `From ${peer.city}`, peer.interests?.length && `Into ${peer.interests.join(', ')}`].filter(Boolean).join(' · ');
     if (about) systemMessage(about);
     if (peer.bio) systemMessage(`“${peer.bio}”`);
-    show('screen-room');
-    await startCall(room.initiator);
+  }
+
+  socket.on('room-state', (room) => {
+    if (!state.room || state.room.roomId !== room.roomId) return;
+    state.room = { ...state.room, ...room };
+    renderRoom();
   });
 
-  async function startCall(initiator) {
-    peerReady = false;
-    localReady = false;
-    pendingCandidates = [];
-    remoteHasVideo = false;
-    remoteCamOn = true;
+  socket.on('room-notice', ({ text }) => { if (state.room) systemMessage(text); });
 
+  socket.on('member-left', ({ id, name, reason }) => {
+    if (!state.room) return;
+    closePeer(id);
+    systemMessage(reason === 'removed' ? `${name} was removed from the call.` : reason === 'disconnected' ? `${name} disconnected.` : `${name} left.`);
+  });
+
+  // Draws tiles, top bar and the room dialog from state.room.
+  function renderRoom() {
+    const room = state.room;
+    if (!room) return;
+    const o = others();
+    const total = room.members.length;
+
+    // 1:1 calls remember who you were with, for "Add friend" / "Report" afterwards.
+    if (o.length === 1 && total === 2) state.lastPeer = o[0];
+
+    $('#stage').dataset.count = String(o.length);
+    $('#waiting').hidden = o.length > 0;
+    for (const id of [...peers.keys()]) if (!memberById(id)) closePeer(id);
+    for (const m of o) ensureTile(m);
+    for (const m of o) {
+      const t = peers.get(m.id)?.tile || $(`#tiles [data-id="${CSS.escape(m.id)}"]`);
+      if (t) {
+        t.querySelector('.tile-name').textContent = m.name;
+        t.querySelector('.host-tag').hidden = room.hostId !== m.id;
+      }
+    }
+
+    // Top bar
+    const acts = [...new Set([room.activity, ...room.members.map((m) => m.activity)].filter(Boolean))];
+    $('#room-activity').textContent = (room.open && room.activity) || acts.slice(0, 2).join('  ·  ') || 'Hanging out';
+    $('#room-who').textContent = !o.length ? 'Your group room'
+      : o.length === 1 ? `Together with ${o[0].name}`
+      : `With ${o.slice(0, 2).map((m) => m.name.split(' ')[0]).join(', ')}${o.length > 2 ? ` +${o.length - 2}` : ''}`;
+    const pill = $('#room-pill');
+    pill.textContent = room.open ? `Open · ${total}/${room.capacity}` : total > 2 ? `Group · ${total}` : '';
+    pill.classList.toggle('open', room.open);
+
+    const canManage = room.isHost || !room.hostId;
+    $('#room-btn-label').textContent = room.open || total > 2 || !canManage ? `People (${total})` : 'Open to others';
+    $('#room-badge').textContent = room.requests.length;
+    $('#room-badge').hidden = !room.requests.length;
+
+    const one = o.length === 1 ? o[0] : null;
+    $('#add-friend-btn').hidden = !one || one.friend || state.friendRequested;
+
+    if ($('#room-dialog').open) renderRoomDialog();
+  }
+
+  function renderRoomDialog() {
+    const room = state.room;
+    if (!room) return;
+    const canManage = room.isHost || !room.hostId;
+    $('#room-host-controls').hidden = !canManage;
+    $('#room-guest-note').hidden = canManage;
+    const host = memberById(room.hostId);
+    $('#room-guest-note').textContent = host
+      ? `${host.name} is the host and decides who can join${room.open ? ` (up to ${room.capacity} people).` : '.'}`
+      : '';
+    $('#room-open').checked = room.open;
+    $('#open-hint').textContent = room.open
+      ? `Visible in matching. ${room.members.length}/${room.capacity} seats taken.`
+      : 'People doing something similar can ask to join. You decide who gets in.';
+    const sel = $('#room-capacity');
+    sel.textContent = '';
+    for (let n = Math.max(2, room.members.length); n <= 5; n++) {
+      const opt = document.createElement('option');
+      opt.value = n;
+      opt.textContent = `${n} people`;
+      sel.append(opt);
+    }
+    // Not open yet: suggest 4 seats for when they flip the switch.
+    sel.value = String(room.open ? room.capacity : Math.max(4, room.members.length));
+    $('#room-error').textContent = '';
+
+    const reqs = $('#room-requests');
+    reqs.textContent = '';
+    $('#room-requests-section').hidden = !room.requests.length;
+    for (const r of room.requests) {
+      const { li, who } = personRow(r);
+      const line = document.createElement('span');
+      line.textContent = [`“${r.activity}”`, metaLine(r)].filter(Boolean).join(' · ');
+      who.append(line);
+      li.append(
+        button('Decline', 'btn btn-ghost', () => answerJoin(r.id, false)),
+        button('Let in', 'btn btn-good', () => answerJoin(r.id, true)),
+      );
+      reqs.append(li);
+    }
+
+    const list = $('#room-members');
+    list.textContent = '';
+    for (const m of room.members) {
+      const { li, who } = personRow(m);
+      const line = document.createElement('span');
+      line.textContent = [m.id === socket.id ? 'You' : null, room.hostId === m.id ? 'Host' : null, m.activity && `“${m.activity}”`].filter(Boolean).join(' · ');
+      who.append(line);
+      if (m.id !== socket.id) {
+        const more = button('⋯', 'icon-btn', (e) => { e.stopPropagation(); openTileMenu(e.currentTarget, m); });
+        more.setAttribute('aria-label', `Options for ${m.name}`);
+        li.append(more);
+      }
+      list.append(li);
+    }
+  }
+
+  $('#room-btn').addEventListener('click', () => {
+    renderRoomDialog();
+    openDialog('#room-dialog');
+  });
+
+  async function saveRoomSettings(patch) {
+    const res = await emit('room-settings', patch);
+    if (res.error) $('#room-error').textContent = res.error;
+  }
+  $('#room-open').addEventListener('change', (e) => saveRoomSettings({ open: e.target.checked, capacity: Number($('#room-capacity').value) }));
+  // Size only applies once the call is open; before that it's sent along with "open".
+  $('#room-capacity').addEventListener('change', (e) => {
+    if (state.room?.open) saveRoomSettings({ capacity: Number(e.target.value) });
+  });
+
+  // ---- Join requests (host side) ----
+  const joinToasts = new Map();
+  socket.on('join-request', ({ from, score }) => {
+    const el = toast({
+      title: `${from.name} wants to join your call`,
+      body: [`“${from.activity}” · ${score}% match`, metaLine(from), from.bio].filter(Boolean).join(' · '),
+      avatarOf: from,
+      timeout: 60000,
+      actions: [
+        { label: 'Decline', onClick: () => answerJoin(from.id, false) },
+        { label: 'Let in', cls: 'btn-good', onClick: () => answerJoin(from.id, true) },
+      ],
+    });
+    joinToasts.set(from.id, el);
+  });
+  socket.on('join-request-cancelled', ({ from }) => { dismiss(joinToasts.get(from)); joinToasts.delete(from); });
+
+  async function answerJoin(id, accept) {
+    dismiss(joinToasts.get(id));
+    joinToasts.delete(id);
+    const res = await emit('join-respond', { from: id, accept });
+    if (res.error) toast({ title: 'Couldn’t do that', body: res.error });
+  }
+
+  // ---- Media ----
+
+  async function startLocalMedia() {
     try {
       localStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true });
     } catch {
@@ -607,88 +828,116 @@
       }
     }
     if (!state.room) { stopMedia(); return; } // left while waiting for permission
-
     const hasVideo = !!localStream?.getVideoTracks().length;
     const hasAudio = !!localStream?.getAudioTracks().length;
     $('#local-video').srcObject = hasVideo ? localStream : null;
     $('#local-placeholder').hidden = hasVideo;
     setCtrl('#cam-btn', hasVideo, !hasVideo);
     setCtrl('#mic-btn', hasAudio, !hasAudio);
+    socket.emit('media-state', { video: hasVideo, audio: hasAudio });
+  }
 
-    pc = new RTCPeerConnection({ iceServers: state.room.iceServers || DEFAULT_ICE });
+  function ensureTile(m) {
+    if ($(`#tiles [data-id="${CSS.escape(m.id)}"]`)) return;
+    const tile = $('#tile-tpl').content.firstElementChild.cloneNode(true);
+    tile.dataset.id = m.id;
+    paintAvatar(tile.querySelector('.avatar'), m.name, m.avatar);
+    tile.querySelector('.tile-name').textContent = m.name;
+    tile.querySelector('.tile-more').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const member = memberById(m.id);
+      if (member) openTileMenu(e.currentTarget, member);
+    });
+    $('#tiles').append(tile);
+  }
+
+  function getPeer(id) {
+    if (peers.has(id)) return peers.get(id);
+    const m = memberById(id);
+    if (m) ensureTile(m);
+    const tile = $(`#tiles [data-id="${CSS.escape(id)}"]`);
+    const pc = new RTCPeerConnection({ iceServers });
+    const peer = { pc, stream: new MediaStream(), tile, pending: [], camOn: true, hasVideo: false };
+    peers.set(id, peer);
+
+    const hasAudio = !!localStream?.getAudioTracks().length;
+    const hasVideo = !!localStream?.getVideoTracks().length;
     if (localStream) for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
     // Always be able to receive audio+video, even if we have nothing to send.
     if (!hasAudio) pc.addTransceiver('audio', { direction: 'recvonly' });
     if (!hasVideo) pc.addTransceiver('video', { direction: 'recvonly' });
 
-    const remoteStream = new MediaStream();
-    $('#remote-video').srcObject = remoteStream;
+    const video = tile?.querySelector('video');
+    const placeholder = tile?.querySelector('.tile-placeholder');
+    const status = tile?.querySelector('.tile-status');
+    if (video) video.srcObject = peer.stream;
     pc.ontrack = (e) => {
-      remoteStream.addTrack(e.track);
-      if (e.track.kind === 'video') {
-        remoteHasVideo = true;
-        if (!e.track.muted) $('#remote-placeholder').hidden = true;
-        e.track.onunmute = () => { $('#remote-placeholder').hidden = !remoteCamOn; };
-        e.track.onmute = () => { $('#remote-placeholder').hidden = false; };
+      peer.stream.addTrack(e.track);
+      if (e.track.kind === 'video' && placeholder) {
+        peer.hasVideo = true;
+        if (!e.track.muted) placeholder.hidden = peer.camOn;
+        e.track.onunmute = () => { placeholder.hidden = !peer.camOn; };
+        e.track.onmute = () => { placeholder.hidden = false; };
       }
     };
-    pc.onicecandidate = (e) => { if (e.candidate) socket.emit('signal', { candidate: e.candidate }); };
+    pc.onicecandidate = (e) => { if (e.candidate) socket.emit('signal', { to: id, candidate: e.candidate }); };
     pc.onconnectionstatechange = () => {
-      const s = pc?.connectionState;
-      if (s === 'connected') $('#remote-status').textContent = `${state.room?.peer.name || 'Peer'}'s camera is off`;
-      if (s === 'failed') $('#remote-status').textContent = 'Could not connect video. Chat still works.';
+      if (!status) return;
+      if (pc.connectionState === 'connected') status.textContent = 'Camera is off';
+      if (pc.connectionState === 'failed') status.textContent = 'Could not connect video. Chat still works.';
     };
-
-    localReady = true;
-    if (initiator) {
-      if (peerReady) await makeOffer();
-    } else {
-      socket.emit('signal', { ready: true });
-    }
-    socket.emit('media-state', { video: hasVideo, audio: hasAudio });
+    return peer;
   }
 
-  async function makeOffer() {
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    socket.emit('signal', { description: pc.localDescription });
+  function closePeer(id) {
+    const p = peers.get(id);
+    p?.pc.close();
+    peers.delete(id);
+    $(`#tiles [data-id="${CSS.escape(id)}"]`)?.remove();
   }
+  function closeAllPeers() { for (const id of [...peers.keys()]) closePeer(id); }
 
-  async function flushCandidates() {
-    for (const c of pendingCandidates) await pc.addIceCandidate(c).catch(() => {});
-    pendingCandidates = [];
-  }
-
-  socket.on('signal', async (data) => {
+  // Server: "you're the later joiner of this pair, call them".
+  socket.on('connect-peer', async ({ peerId }) => {
     if (!state.room) return;
     try {
-      if (data.ready) {
-        peerReady = true;
-        if (state.room.initiator && localReady) await makeOffer();
-        return;
-      }
-      // Offers only follow our 'ready', and answers only follow our offer, so pc exists here.
-      if (!pc) return;
-      if (data.description) {
-        await pc.setRemoteDescription(data.description);
-        if (data.description.type === 'offer') {
-          await pc.setLocalDescription(await pc.createAnswer());
-          socket.emit('signal', { description: pc.localDescription });
+      const { pc } = getPeer(peerId);
+      await pc.setLocalDescription(await pc.createOffer());
+      socket.emit('signal', { to: peerId, description: pc.localDescription });
+    } catch (err) {
+      console.error('Offer failed', err);
+    }
+  });
+
+  socket.on('signal', async ({ from, description, candidate }) => {
+    if (!state.room || !memberById(from)) return;
+    const peer = getPeer(from);
+    try {
+      if (description) {
+        await peer.pc.setRemoteDescription(description);
+        if (description.type === 'offer') {
+          await peer.pc.setLocalDescription(await peer.pc.createAnswer());
+          socket.emit('signal', { to: from, description: peer.pc.localDescription });
         }
-        await flushCandidates();
-      } else if (data.candidate) {
-        if (pc.remoteDescription) await pc.addIceCandidate(data.candidate).catch(() => {});
-        else pendingCandidates.push(data.candidate);
+        for (const c of peer.pending) await peer.pc.addIceCandidate(c).catch(() => {});
+        peer.pending = [];
+      } else if (candidate) {
+        if (peer.pc.remoteDescription) await peer.pc.addIceCandidate(candidate).catch(() => {});
+        else peer.pending.push(candidate);
       }
     } catch (err) {
       console.error('Signaling error', err);
     }
   });
 
-  socket.on('media-state', ({ video }) => {
-    remoteCamOn = !!video;
-    if (!video) $('#remote-status').textContent = `${state.room?.peer.name || 'Peer'}'s camera is off`;
-    $('#remote-placeholder').hidden = remoteCamOn && remoteHasVideo;
+  socket.on('media-state', ({ from, video, audio }) => {
+    const peer = peers.get(from);
+    const tile = peer?.tile || $(`#tiles [data-id="${CSS.escape(from)}"]`);
+    if (!tile) return;
+    if (peer) peer.camOn = !!video;
+    tile.querySelector('.muted-tag').hidden = !!audio;
+    if (!video) tile.querySelector('.tile-status').textContent = 'Camera is off';
+    tile.querySelector('.tile-placeholder').hidden = !!video && !!peer?.hasVideo;
   });
 
   function setCtrl(sel, on, disabled = false) {
@@ -697,12 +946,19 @@
     b.disabled = disabled;
   }
 
+  function sendMediaState() {
+    socket.emit('media-state', {
+      audio: !!localStream?.getAudioTracks()[0]?.enabled,
+      video: !!localStream?.getVideoTracks()[0]?.enabled,
+    });
+  }
+
   $('#mic-btn').addEventListener('click', () => {
     const track = localStream?.getAudioTracks()[0];
     if (!track) return;
     track.enabled = !track.enabled;
     setCtrl('#mic-btn', track.enabled);
-    socket.emit('media-state', { audio: track.enabled, video: !!localStream.getVideoTracks()[0]?.enabled });
+    sendMediaState();
   });
 
   $('#cam-btn').addEventListener('click', () => {
@@ -711,21 +967,23 @@
     track.enabled = !track.enabled;
     setCtrl('#cam-btn', track.enabled);
     $('#local-placeholder').hidden = track.enabled;
-    socket.emit('media-state', { video: track.enabled, audio: !!localStream.getAudioTracks()[0]?.enabled });
+    sendMediaState();
   });
 
   function stopMedia() {
-    pc?.close();
-    pc = null;
+    closeAllPeers();
     localStream?.getTracks().forEach((t) => t.stop());
     localStream = null;
     $('#local-video').srcObject = null;
-    $('#remote-video').srcObject = null;
   }
 
   function exitRoom(notice) {
     stopMedia();
     state.room = null;
+    for (const el of joinToasts.values()) dismiss(el);
+    joinToasts.clear();
+    if ($('#room-dialog').open) $('#room-dialog').close();
+    closeTileMenu();
     $('#chat-panel').removeAttribute('data-open');
     // Calls from a friend invite can start before you've typed an activity.
     show(state.activity ? 'screen-matches' : 'screen-activity');
@@ -733,13 +991,14 @@
   }
 
   $('#leave-btn').addEventListener('click', () => {
-    const peer = state.room?.peer;
+    const wasOneToOne = others().length === 1;
+    const peer = state.lastPeer;
     socket.emit('leave-room');
     exitRoom();
-    if (peer) postCallPrompt(peer, `Call with ${peer.name} ended`);
+    if (wasOneToOne && peer) postCallPrompt(peer, `Call with ${peer.name} ended`);
   });
 
-  // After a call: offer "Add friend" (unless already friends/asked) and "Report a problem".
+  // After a 1:1 call: offer "Add friend" (unless already friends/asked) and "Report a problem".
   function postCallPrompt(peer, title) {
     const actions = [];
     if (!peer.friend && !state.friendRequested) {
@@ -755,10 +1014,11 @@
     });
   }
 
-  async function addFriend(name) {
-    const res = await emit('friend-request');
+  // target: a member id in the current call; omitted = your last 1:1 partner.
+  async function addFriend(name, target) {
+    const res = await emit('friend-request', target ? { target } : undefined);
     if (res.error) return toast({ title: 'Couldn’t add friend', body: res.error });
-    state.friendRequested = true;
+    if (!target || others().length === 1) state.friendRequested = true;
     const btn = $('#add-friend-btn');
     if (res.status === 'friends') {
       btn.hidden = true;
@@ -771,18 +1031,98 @@
   }
 
   $('#add-friend-btn').addEventListener('click', () => {
-    if (state.room) addFriend(state.room.peer.name);
+    const one = others()[0];
+    if (one) addFriend(one.name, one.id);
   });
 
-  socket.on('peer-left', ({ reason }) => {
-    const peer = state.room?.peer;
-    const name = peer?.name || 'Your match';
+  // A closed call ended because everyone else left (or our other tab blocked them).
+  socket.on('room-ended', ({ reason, name } = {}) => {
+    if (!state.room) return;
+    const peer = state.lastPeer;
     exitRoom();
-    if (peer) postCallPrompt(peer, reason === 'disconnected' ? `${name} disconnected` : `${name} left the call`);
+    if (reason !== 'self' && peer) postCallPrompt(peer, reason === 'disconnected' ? `${name} disconnected` : `${name} left the call`);
   });
 
-  // Another tab of ours blocked this person mid-call.
-  socket.on('room-ended', () => { if (state.room) exitRoom(); });
+  socket.on('removed-from-room', () => {
+    if (state.room) exitRoom('You were removed from the call');
+  });
+
+  // ---- ⋯ menu on a person in the call ----
+  let tileMenuFor = null;
+  function openTileMenu(btn, member) {
+    const menu = $('#tile-menu');
+    if (tileMenuFor === member.id && !menu.hidden) return closeTileMenu();
+    closeTileMenu();
+    closeCardMenu();
+    tileMenuFor = member.id;
+    menu.querySelector('[data-action="friend"]').hidden = !!member.friend;
+    menu.querySelector('[data-action="remove"]').hidden = !state.room?.isHost;
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    const r = btn.getBoundingClientRect();
+    const w = menu.offsetWidth;
+    const h = menu.offsetHeight;
+    menu.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`;
+    menu.style.top = `${Math.min(r.bottom + 6, window.innerHeight - h - 8)}px`;
+    // In an open dialog, the menu must sit inside it to be clickable (top layer).
+    const dlg = btn.closest('dialog');
+    (dlg || document.body).append(menu);
+    menu.onclick = async (e) => {
+      const action = e.target.closest('[data-action]')?.dataset.action;
+      if (!action) return;
+      closeTileMenu();
+      if (action === 'friend') addFriend(member.name, member.id);
+      if (action === 'report') openReport({ target: member.id }, member.name, true);
+      if (action === 'block') confirmBlock({ target: member.id }, member.name, true);
+      if (action === 'remove' && confirm(`Remove ${member.name} from the call? They won't be able to rejoin it.`)) {
+        const res = await emit('remove-member', { id: member.id });
+        if (res.error) toast({ title: 'Couldn’t remove', body: res.error });
+      }
+    };
+  }
+  function closeTileMenu() {
+    const menu = $('#tile-menu');
+    menu.hidden = true;
+    document.querySelectorAll('.tile-more[aria-expanded="true"], .icon-btn[aria-expanded="true"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+    tileMenuFor = null;
+  }
+  document.addEventListener('click', (e) => { if (!e.target.closest('#tile-menu')) closeTileMenu(); });
+
+  // ---- Group rooms from search ----
+  function openCreateRoom() {
+    $('#create-room-activity').textContent = state.activity;
+    openDialog('#create-room-dialog');
+  }
+  $('#start-group-btn').addEventListener('click', openCreateRoom);
+  $('#start-group-from-prompt').addEventListener('click', async () => {
+    const activity = $('#activity-input').value.trim();
+    if (!activity) {
+      $('#activity-error').textContent = 'First tell us what you’re doing. Your group room will be for that.';
+      return $('#activity-input').focus();
+    }
+    const res = await emit('set-activity', { activity });
+    if (res.error) { $('#activity-error').textContent = res.error; return; }
+    state.activity = activity;
+    $('#my-activity').textContent = activity;
+    show('screen-matches');
+    openCreateRoom();
+  });
+  $('#create-room-go').addEventListener('click', async () => {
+    const res = await emit('create-room', { capacity: Number($('#create-room-size').value) });
+    if (res.error) { $('#create-room-dialog .form-error').textContent = res.error; return; }
+    $('#create-room-dialog').close();
+  });
+
+  // ---- Asking to join a group (requester side) ----
+  socket.on('join-declined', ({ reason, activity }) => {
+    const titles = {
+      declined: 'The host didn’t let you in this time',
+      timeout: 'No answer from the host',
+      full: 'That group filled up',
+      closed: 'That group isn’t taking people anymore',
+    };
+    toast({ title: titles[reason] || titles.closed, body: `“${activity}”. Try another group or person.` });
+  });
 
   socket.on('suspended', () => {
     signedOut('Your account has been suspended for breaking the community guidelines.');
@@ -1034,7 +1374,8 @@
     btn.disabled = false;
     if (res.error) { err.textContent = res.error; return; }
     $('#report-dialog').close();
-    if (block && reportCtx.inCall && state.room) exitRoom();
+    // In a group the blocked person is removed instead; in a 1:1 the call ends.
+    if (block && reportCtx.inCall && state.room && others().length <= 1) exitRoom();
     toast({
       title: 'Thanks, your report was sent',
       body: block ? `You won’t see ${reportCtx.name} again.` : 'We’ll review it as soon as possible.',
@@ -1052,13 +1393,18 @@
     const res = await emit('block', blockCtx.target);
     if (res.error) { $('#block-dialog .form-error').textContent = res.error; return; }
     $('#block-dialog').close();
-    if (blockCtx.inCall && state.room) exitRoom();
+    if (blockCtx.inCall && state.room && others().length <= 1) exitRoom();
     toast({ title: `${blockCtx.name} is blocked`, body: 'You won’t see each other again.' });
   });
 
   // In-call flag button: report (with "also block" ticked) covers both cases.
   $('#report-btn').addEventListener('click', () => {
-    if (state.room) openReport({ lastPeer: true }, state.room.peer.name, true);
+    if (!state.room) return;
+    const o = others();
+    if (o.length === 1) return openReport({ target: o[0].id }, o[0].name, true);
+    // Group: pick who from the people list (⋯ → Report).
+    renderRoomDialog();
+    openDialog('#room-dialog');
   });
 
   // Blocked people list (account menu)
@@ -1112,10 +1458,17 @@
     li.scrollIntoView({ block: 'end' });
   }
 
-  socket.on('chat', ({ from, text }) => {
+  socket.on('chat', ({ from, name, text }) => {
     const li = document.createElement('li');
     li.className = 'msg' + (from === socket.id ? ' mine' : '');
-    li.textContent = text;
+    // In groups, show who said it.
+    if (from !== socket.id && others().length > 1) {
+      const who = document.createElement('span');
+      who.className = 'msg-name';
+      who.textContent = name;
+      li.append(who);
+    }
+    li.append(text);
     $('#chat-log').append(li);
     li.scrollIntoView({ block: 'end', behavior: 'smooth' });
     if (from !== socket.id && !$('#chat-panel').hasAttribute('data-open') && getComputedStyle($('#chat-toggle')).display !== 'none') {

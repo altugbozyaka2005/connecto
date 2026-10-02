@@ -213,6 +213,7 @@
             </div>
             <p class="form-error" id="activity-error" role="alert"></p>
           </form>
+          <p class="or-group">or <button type="button" class="link-btn link-accent" id="start-group-from-prompt">start a group room</button> for this activity</p>
           <div class="chips" id="suggestions" aria-label="Suggestions"></div>
         </div>
       </main>
@@ -259,6 +260,17 @@
           <h2>Closest matches</h2>
           <span class="live"><i></i><span id="online-count">0</span> online now</span>
         </div>
+        <div class="matches-tools">
+          <div class="tabs filter-tabs" role="tablist" aria-label="Show">
+            <button type="button" role="tab" class="tab" data-filter="all" aria-selected="true">All <span class="n" id="n-all"></span></button>
+            <button type="button" role="tab" class="tab" data-filter="people" aria-selected="false">People <span class="n" id="n-people"></span></button>
+            <button type="button" role="tab" class="tab" data-filter="groups" aria-selected="false">Groups <span class="n" id="n-groups"></span></button>
+          </div>
+          <button class="btn btn-ghost" id="start-group-btn" type="button">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
+            Start a group room
+          </button>
+        </div>
 
         <div class="grid" id="match-grid"></div>
 
@@ -274,24 +286,25 @@
     <section class="screen" id="screen-room">
       <header class="topbar room-topbar">
         <div class="room-title">
-          <p class="eyebrow">Together with <span id="peer-name"></span></p>
+          <p class="eyebrow"><span id="room-who"></span> <span class="room-pill" id="room-pill"></span></p>
           <p class="room-activity" id="room-activity"></p>
         </div>
         <div class="room-actions">
           <button class="btn btn-ghost" id="add-friend-btn" type="button">Add friend</button>
+          <button class="btn btn-ghost" id="room-btn" type="button">
+            <span id="room-btn-label">Open to others</span> <span class="badge" id="room-badge" hidden></span>
+          </button>
           <button class="btn btn-ghost chat-toggle" id="chat-toggle" type="button">Chat <span class="dot" id="chat-dot" hidden></span></button>
         </div>
       </header>
 
       <div class="room-body">
-        <div class="stage">
-          <div class="tile tile-remote">
-            <video id="remote-video" autoplay playsinline></video>
-            <div class="tile-placeholder" id="remote-placeholder">
-              <div class="avatar avatar-xl" id="peer-avatar"></div>
-              <p id="remote-status">Connecting…</p>
-            </div>
-            <span class="tile-label" id="remote-label"></span>
+        <div class="stage" id="stage" data-count="1">
+          <div class="tiles" id="tiles"></div>
+          <div class="waiting" id="waiting" hidden>
+            <div class="radar" aria-hidden="true"><span></span><span></span><span></span></div>
+            <p><strong>Waiting for people to join…</strong></p>
+            <p class="hint">Your room shows up for people doing something similar. You'll be asked before anyone joins.</p>
           </div>
           <div class="tile tile-local">
             <video id="local-video" autoplay playsinline muted></video>
@@ -360,6 +373,98 @@
       </div>
     </article>
   </template>
+
+  <template id="group-card-tpl">
+    <article class="match-card group-card">
+      <button class="match-hit" type="button"></button>
+      <div class="group-top">
+        <span class="pill-group">
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5Z"/></svg>
+          Group
+        </span>
+        <span class="seats"><b class="seat-count"></b> <span class="seat-dots" aria-hidden="true"></span></span>
+      </div>
+      <div class="avatar-stack"></div>
+      <div class="match-info">
+        <p class="match-activity group-activity"></p>
+        <p class="match-meta group-host"></p>
+      </div>
+      <div class="match-foot">
+        <span class="score"><span class="score-bar"><i></i></span><b></b></span>
+        <span class="match-cta"></span>
+      </div>
+    </article>
+  </template>
+
+  <template id="tile-tpl">
+    <div class="tile tile-remote">
+      <video autoplay playsinline></video>
+      <div class="tile-placeholder">
+        <div class="avatar avatar-xl"></div>
+        <p class="tile-status">Connecting…</p>
+      </div>
+      <span class="tile-label"><span class="tile-name"></span><span class="host-tag" hidden>Host</span><span class="muted-tag" hidden>🔇</span></span>
+      <button class="tile-more" type="button" aria-label="Options" aria-haspopup="menu">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
+      </button>
+    </div>
+  </template>
+
+  <!-- Person ⋯ menu inside a call -->
+  <div class="menu popover" id="tile-menu" role="menu" hidden>
+    <button type="button" class="menu-item" data-action="friend" role="menuitem">Add friend</button>
+    <button type="button" class="menu-item" data-action="report" role="menuitem">Report…</button>
+    <button type="button" class="menu-item logout-like" data-action="block" role="menuitem">Block</button>
+    <button type="button" class="menu-item logout-like" data-action="remove" role="menuitem">Remove from call</button>
+  </div>
+
+  <!-- Room settings & people (host controls) -->
+  <dialog class="dialog" id="room-dialog" aria-labelledby="room-dialog-title">
+    <h3 id="room-dialog-title">This call</h3>
+    <section id="room-host-controls">
+      <label class="switch-row">
+        <span>
+          <strong>Open to others</strong>
+          <small id="open-hint">People doing something similar can ask to join. You decide who gets in.</small>
+        </span>
+        <input type="checkbox" id="room-open" role="switch" />
+      </label>
+      <label class="field size-field">
+        <span>Room size</span>
+        <select id="room-capacity"></select>
+      </label>
+      <p class="form-error" id="room-error" role="alert"></p>
+    </section>
+    <p class="form-intro" id="room-guest-note" hidden></p>
+    <section id="room-requests-section" hidden>
+      <p class="eyebrow">Asking to join</p>
+      <ul class="people-list" id="room-requests"></ul>
+    </section>
+    <p class="eyebrow">In this call</p>
+    <ul class="people-list" id="room-members"></ul>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" data-close>Close</button>
+    </div>
+  </dialog>
+
+  <!-- Start a group room -->
+  <dialog class="dialog dialog-sm" id="create-room-dialog" aria-labelledby="create-room-title">
+    <h3 id="create-room-title">Start a group room</h3>
+    <p class="form-intro">You'll host a room for “<span id="create-room-activity"></span>”. It shows up for people doing something similar, and you decide who gets in.</p>
+    <label class="field">
+      <span>Up to how many people (including you)?</span>
+      <select id="create-room-size">
+        <option value="3">3 people</option>
+        <option value="4" selected>4 people</option>
+        <option value="5">5 people</option>
+      </select>
+    </label>
+    <p class="form-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+      <button type="button" class="btn btn-primary" id="create-room-go">Start room</button>
+    </div>
+  </dialog>
 
   <!-- Match card ⋯ menu -->
   <div class="menu popover" id="card-menu" role="menu" hidden>

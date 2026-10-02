@@ -39,7 +39,7 @@ test('blocking during a call ends it for both sides', async (t) => {
   const { sock: b } = await signedInSocket(base);
   t.after(() => { a.close(); b.close(); });
   await matchUp(a, b, 'call block test origami');
-  const left = once(b, 'peer-left');
+  const left = once(b, 'room-ended');
   const ended = once(a, 'room-ended');
   assert.deepStrictEqual(await call(a, 'block', { lastPeer: true }), { ok: true });
   assert.strictEqual((await left).reason, 'left', 'blocked person is not told they were blocked');
@@ -117,7 +117,7 @@ test('you can report the person from your last call after it ends, but not yours
   const { sock: b } = await signedInSocket(base);
   t.after(() => { a.close(); b.close(); });
   await matchUp(a, b, 'after call report test pottery');
-  const left = once(a, 'peer-left');
+  const left = once(a, 'room-ended');
   b.emit('leave-room');
   await left;
   assert.deepStrictEqual(await call(a, 'report', { lastPeer: true, reason: 'other' }), { ok: true });

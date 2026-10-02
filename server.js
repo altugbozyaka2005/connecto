@@ -19,6 +19,11 @@ const MAX_TRANSCRIPT = 100;
 // Each shared interest nudges a match up a little (only for matches that already qualify).
 const INTEREST_BOOST = 0.05;
 const MAX_INTEREST_BOOST = 0.15;
+// Group rooms: everyone sends video to everyone (browser-to-browser), which tops out around 5.
+const MAX_ROOM_SIZE = 5;
+const MAX_GROUP_MATCHES = 8;
+const JOIN_REQUEST_TTL_MS = 60 * 1000;
+const MAX_PENDING_JOINS = 3;
 
 const app = express();
 // Set TRUST_PROXY=1 when running behind a load balancer so rate limits see real client IPs.
@@ -57,10 +62,14 @@ safety.setSuspendHandler((accountId) => {
 
 // socket.id -> user (one entry per open tab)
 // user: { id, accountId, name, avatar, activity, profile, status: 'idle'|'searching'|'in-room',
-//         roomId, outgoing: Set<id>, incoming: Set<id>, joinedAt,
-//         lastPeer: { accountId, name, activity, chat, at } }   <- for reporting after a call
+//         roomId, outgoing: Set<id>, incoming: Set<id>, joinRequests: Set<roomId>, joinedAt,
+//         lastPeer: { accountId, name, activity, chat, at } }   <- for reporting after a 1:1 call
 const users = new Map();
-// roomId -> { id, members: [id, id], chat: [{ name, text, at }], createdAt }
+// roomId -> {
+//   id, members: [socketId] (join order), hostId (socketId or null until opened),
+//   capacity (2..5), open (visible in matching), activity, profile (for matching),
+//   chat: [{ name, text, at }], removed: Set<accountId>, joinRequests: Map<socketId, timer>,
+//   ready: Set<socketId> (media ready), links: Set<'a|b'> (peer connections set up), createdAt }
 const rooms = new Map();
 
 const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -110,6 +119,32 @@ function matchesFor(user) {
   return results.slice(0, MAX_MATCHES);
 }
 
+// Open group rooms with a free seat, ranked by how close their activity is to yours.
+function groupsFor(user) {
+  const results = [];
+  for (const room of rooms.values()) {
+    if (!room.open || room.members.length >= room.capacity || room.removed.has(user.accountId)) continue;
+    const members = room.members.map((id) => users.get(id)).filter(Boolean);
+    if (members.some((m) => m.accountId === user.accountId || safety.isBlocked(user.accountId, m.accountId))) continue;
+    let s = score(user.profile, room.profile);
+    for (const m of members) s = Math.max(s, score(user.profile, m.profile));
+    if (s < MIN_SCORE) continue;
+    const host = users.get(room.hostId);
+    results.push({
+      id: room.id,
+      activity: room.activity,
+      hostName: host?.name || '',
+      members: members.map((m) => ({ name: m.name, avatar: m.avatar, friend: friends.areFriends(user.accountId, m.accountId) })),
+      count: members.length,
+      capacity: room.capacity,
+      score: Math.round(s * 100),
+      requested: room.joinRequests.has(user.id),
+    });
+  }
+  results.sort((a, b) => b.score - a.score || b.count - a.count);
+  return results.slice(0, MAX_GROUP_MATCHES);
+}
+
 // Recompute and push match lists to every searching user. Debounced so bursts of
 // joins/leaves only trigger one pass.
 let recomputeTimer = null;
@@ -121,7 +156,7 @@ function scheduleRecompute() {
     for (const u of users.values()) if (u.status === 'searching') searching++;
     for (const u of users.values()) {
       if (u.status !== 'searching') continue;
-      io.to(u.id).emit('matches', { matches: matchesFor(u), online: searching });
+      io.to(u.id).emit('matches', { matches: matchesFor(u), groups: groupsFor(u), online: searching });
     }
     pushFriendLists();
   }, 120);
@@ -213,40 +248,165 @@ function clearRequests(user, notify = true) {
 
 // ---------- Rooms ----------
 
-function openRoom(a, b) {
-  clearRequests(a);
-  clearRequests(b);
-  const roomId = crypto.randomUUID();
-  // The server relays every chat message, so it keeps them while the room lasts; they're only
-  // ever stored if someone files a report from this call.
-  const chat = [];
-  rooms.set(roomId, { id: roomId, members: [a.id, b.id], chat, createdAt: Date.now() });
-  for (const [u, peer] of [[a, b], [b, a]]) {
-    u.status = 'in-room';
-    u.roomId = roomId;
-    u.lastPeer = { accountId: peer.accountId, name: peer.name, activity: peer.activity, chat, at: Date.now() };
-    io.sockets.sockets.get(u.id)?.join(roomId);
+// What one member sees about their room. Join requests are only shown to the host.
+function roomView(room, viewer) {
+  return {
+    roomId: room.id,
+    hostId: room.hostId,
+    isHost: room.hostId === viewer.id,
+    capacity: room.capacity,
+    open: room.open,
+    activity: room.activity,
+    members: room.members.map((id) => users.get(id)).filter(Boolean).map((m) => ({
+      ...publicUser(m),
+      friend: m.accountId !== viewer.accountId && friends.areFriends(viewer.accountId, m.accountId),
+    })),
+    requests: room.hostId === viewer.id
+      ? [...room.joinRequests.keys()].map((id) => users.get(id)).filter(Boolean).map(publicUser)
+      : [],
+  };
+}
+
+function broadcastRoom(room) {
+  for (const id of room.members) {
+    const m = users.get(id);
+    if (m) io.to(id).emit('room-state', roomView(room, m));
   }
-  // The requester (b accepted a's request) creates the WebRTC offer.
-  const areFriends = friends.areFriends(a.accountId, b.accountId);
-  io.to(a.id).emit('room-start', { roomId, peer: { ...publicUser(b), friend: areFriends }, initiator: true, iceServers: iceServersFor(a.accountId) });
-  io.to(b.id).emit('room-start', { roomId, peer: { ...publicUser(a), friend: areFriends }, initiator: false, iceServers: iceServersFor(b.accountId) });
   scheduleRecompute();
 }
 
-function leaveRoom(user, reason = 'left') {
-  const room = rooms.get(user.roomId);
-  if (!room) return;
-  rooms.delete(room.id);
-  for (const memberId of room.members) {
-    const m = users.get(memberId);
-    if (!m) continue;
-    io.sockets.sockets.get(m.id)?.leave(room.id);
-    m.roomId = null;
-    m.status = m.activity ? 'searching' : 'idle';
-    if (m.id !== user.id) io.to(m.id).emit('peer-left', { reason });
+function newRoom({ capacity = 2, open = false, hostId = null, activity = '' } = {}) {
+  const room = {
+    id: crypto.randomUUID(),
+    members: [],
+    hostId,
+    capacity,
+    open,
+    activity,
+    profile: analyze(activity),
+    // The server relays every chat message, so it keeps them while the room lasts; they're only
+    // ever stored if someone files a report from this call.
+    chat: [],
+    removed: new Set(),
+    joinRequests: new Map(),
+    ready: new Set(),
+    links: new Set(),
+    createdAt: Date.now(),
+  };
+  rooms.set(room.id, room);
+  return room;
+}
+
+function attach(room, u) {
+  clearRequests(u);
+  cancelJoinRequests(u);
+  room.members.push(u.id);
+  u.status = 'in-room';
+  u.roomId = room.id;
+  io.sockets.sockets.get(u.id)?.join(room.id);
+}
+
+function sendRoomStart(room, u) {
+  io.to(u.id).emit('room-start', { ...roomView(room, u), iceServers: iceServersFor(u.accountId) });
+}
+
+function addMember(room, u) {
+  attach(room, u);
+  sendRoomStart(room, u);
+}
+
+// 1:1 call from a request. The requester joins second so they make the WebRTC offer.
+function openRoom(requester, accepter) {
+  const room = newRoom();
+  for (const [u, peer] of [[accepter, requester], [requester, accepter]]) {
+    u.lastPeer = { accountId: peer.accountId, name: peer.name, activity: peer.activity, chat: room.chat, at: Date.now() };
   }
+  // Both are in the room before either is told, so each sees the other straight away.
+  attach(room, accepter);
+  attach(room, requester);
+  sendRoomStart(room, accepter);
+  sendRoomStart(room, requester);
   scheduleRecompute();
+}
+
+// Someone leaves, is removed or disconnects. A closed room with one person left ends;
+// an open room keeps going (the last person waits for others to join).
+function removeMember(room, u, reason) {
+  room.members = room.members.filter((id) => id !== u.id);
+  room.ready.delete(u.id);
+  for (const link of [...room.links]) if (link.split('|').includes(u.id)) room.links.delete(link);
+  io.sockets.sockets.get(u.id)?.leave(room.id);
+  u.roomId = null;
+  u.status = u.activity ? 'searching' : 'idle';
+  // Host passes to whoever has been in the room longest.
+  if (room.hostId === u.id) room.hostId = room.members[0] || null;
+
+  if (!room.members.length) return closeRoom(room);
+  if (room.members.length === 1 && !room.open) {
+    const last = users.get(room.members[0]);
+    closeRoom(room);
+    if (last) {
+      last.roomId = null;
+      last.status = last.activity ? 'searching' : 'idle';
+      io.sockets.sockets.get(last.id)?.leave(room.id);
+      io.to(last.id).emit('room-ended', { reason, name: u.name });
+    }
+    return scheduleRecompute();
+  }
+  for (const id of room.members) io.to(id).emit('member-left', { id: u.id, name: u.name, reason });
+  broadcastRoom(room);
+}
+
+function closeRoom(room) {
+  for (const id of [...room.joinRequests.keys()]) declineJoin(room, id, 'closed');
+  rooms.delete(room.id);
+  scheduleRecompute();
+}
+
+// Media is ready on this member's side: connect them to every other ready member.
+// The later joiner of each pair makes the offer, so every pair connects exactly once.
+function markReady(room, u) {
+  room.ready.add(u.id);
+  for (const otherId of room.ready) {
+    if (otherId === u.id) continue;
+    const link = [u.id, otherId].sort().join('|');
+    if (room.links.has(link)) continue;
+    room.links.add(link);
+    const offerer = room.members.indexOf(u.id) > room.members.indexOf(otherId) ? u.id : otherId;
+    const answerer = offerer === u.id ? otherId : u.id;
+    io.to(offerer).emit('connect-peer', { peerId: answerer });
+  }
+}
+
+// ---------- Join requests (group rooms) ----------
+
+function declineJoin(room, requesterId, reason) {
+  const timer = room.joinRequests.get(requesterId);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  room.joinRequests.delete(requesterId);
+  const r = users.get(requesterId);
+  r?.joinRequests.delete(room.id);
+  io.to(requesterId).emit('join-declined', { roomId: room.id, activity: room.activity, reason });
+}
+
+// Withdraw all of this user's pending join requests (they joined something else or left).
+function cancelJoinRequests(u) {
+  for (const roomId of u.joinRequests) {
+    const room = rooms.get(roomId);
+    if (!room) continue;
+    clearTimeout(room.joinRequests.get(u.id));
+    room.joinRequests.delete(u.id);
+    if (room.hostId) io.to(room.hostId).emit('join-request-cancelled', { from: u.id });
+    broadcastRoom(room);
+  }
+  u.joinRequests.clear();
+}
+
+// Seats filled or the room was closed: nobody else can get in.
+function settleRequests(room) {
+  const reason = !room.open ? 'closed' : room.members.length >= room.capacity ? 'full' : null;
+  if (reason) for (const id of [...room.joinRequests.keys()]) declineJoin(room, id, reason);
 }
 
 // ---------- Blocking ----------
@@ -261,6 +421,9 @@ function resolveTarget(u, { target, lastPeer } = {}) {
   }
   const t = users.get(target);
   if (!t || t.accountId === u.accountId) return null;
+  if (t.roomId && t.roomId === u.roomId) {
+    return { accountId: t.accountId, context: 'call', activity: t.activity, transcript: rooms.get(u.roomId)?.chat };
+  }
   return { accountId: t.accountId, context: 'match', activity: t.activity, transcript: null };
 }
 
@@ -273,9 +436,20 @@ function applyBlock(blockerAccountId, blockedAccountId) {
   const theirs = [...users.values()].filter((x) => x.accountId === blockedAccountId);
   for (const x of mine) {
     for (const y of theirs) {
-      if (x.roomId && x.roomId === y.roomId) {
-        leaveRoom(x, 'left');
-        io.to(x.id).emit('room-ended');
+      const room = x.roomId && x.roomId === y.roomId ? rooms.get(x.roomId) : null;
+      if (room && room.members.length > 2) {
+        // In a group, the blocked person is removed (without being told who did it).
+        room.removed.add(y.accountId);
+        removeMember(room, y, 'removed');
+        io.to(y.id).emit('removed-from-room');
+      } else if (room) {
+        removeMember(room, x, 'left');
+        io.to(x.id).emit('room-ended', { reason: 'self' });
+      }
+      // Pending join requests between them go too.
+      for (const r of rooms.values()) {
+        if (r.members.includes(x.id) && r.joinRequests.has(y.id)) declineJoin(r, y.id, 'declined');
+        if (r.members.includes(y.id) && r.joinRequests.has(x.id)) declineJoin(r, x.id, 'declined');
       }
       if (x.outgoing.delete(y.id)) {
         y.incoming.delete(x.id);
@@ -308,6 +482,7 @@ io.on('connection', (socket) => {
     roomId: null,
     outgoing: new Set(),
     incoming: new Set(),
+    joinRequests: new Set(),
     joinedAt: Date.now(),
   };
   applyProfile(entry, account);
@@ -336,6 +511,7 @@ io.on('connection', (socket) => {
     u.status = 'searching';
     // Requests were made against the old activity; drop them.
     clearRequests(u);
+    cancelJoinRequests(u);
     ack?.({ ok: true });
     scheduleRecompute();
   });
@@ -345,6 +521,7 @@ io.on('connection', (socket) => {
     if (!u || u.status !== 'searching') return;
     u.status = 'idle';
     clearRequests(u);
+    cancelJoinRequests(u);
     scheduleRecompute();
   });
 
@@ -403,14 +580,27 @@ io.on('connection', (socket) => {
     ack?.({ ok: true });
   });
 
-  // WebRTC signaling + chat, relayed only to the other member of the caller's room.
-  const relay = (event) => (data) => {
+  // ---- Calls: WebRTC signaling between members of the same room ----
+
+  socket.on('media-ready', () => {
+    const u = me();
+    const room = u && rooms.get(u.roomId);
+    if (room) markReady(room, u);
+  });
+
+  // Offers/answers/candidates go to one specific member of your room.
+  socket.on('signal', ({ to, ...data } = {}) => {
+    const u = me();
+    const t = users.get(to);
+    if (!u || !u.roomId || !t || t.roomId !== u.roomId) return;
+    io.to(to).emit('signal', { ...data, from: u.id });
+  });
+
+  socket.on('media-state', (data = {}) => {
     const u = me();
     if (!u || !u.roomId) return;
-    socket.to(u.roomId).emit(event, data);
-  };
-  socket.on('signal', relay('signal'));
-  socket.on('media-state', relay('media-state'));
+    socket.to(u.roomId).emit('media-state', { video: !!data.video, audio: !!data.audio, from: u.id });
+  });
 
   socket.on('chat', ({ text } = {}) => {
     const u = me();
@@ -426,11 +616,19 @@ io.on('connection', (socket) => {
   // ---- Friends ----
 
   // "Add as friend?" after a call. Only works for the person you were just with.
-  socket.on('friend-request', (_payload, ack) => {
+  // "Add as friend?" for someone in your current call ({ target }) or your last 1:1 call.
+  socket.on('friend-request', (payload, ack) => {
     const u = me();
-    const p = u?.lastPeer;
-    if (!p || (!u.roomId && Date.now() - p.at > LAST_PEER_TTL_MS)) return ack?.({ error: 'That call ended too long ago.' });
-    if (safety.isBlocked(u.accountId, p.accountId)) return ack?.({ error: 'That person is no longer available.' });
+    if (!u) return;
+    let p = null;
+    if (payload?.target) {
+      const t = users.get(payload.target);
+      if (t && t.roomId && t.roomId === u.roomId) p = { accountId: t.accountId };
+    } else if (u.lastPeer && (u.roomId || Date.now() - u.lastPeer.at <= LAST_PEER_TTL_MS)) {
+      p = u.lastPeer;
+    }
+    if (!p) return ack?.({ error: 'That call ended too long ago.' });
+    if (p.accountId === u.accountId || safety.isBlocked(u.accountId, p.accountId)) return ack?.({ error: 'That person is no longer available.' });
     const status = friends.request(u.accountId, p.accountId);
     if (status === 'friends') {
       io.to(`account:${p.accountId}`).emit('friend-added', { name: u.name });
@@ -508,15 +706,129 @@ io.on('connection', (socket) => {
     ack?.({ ok: true });
   });
 
+  // ---- Group rooms ----
+
+  // Start a group room from search; you're the host and it's open right away.
+  socket.on('create-room', ({ capacity } = {}, ack) => {
+    const u = me();
+    if (!u || u.status !== 'searching') return ack?.({ error: 'Tell us what you’re doing first.' });
+    const cap = Number(capacity);
+    if (!Number.isInteger(cap) || cap < 2 || cap > MAX_ROOM_SIZE) return ack?.({ error: `Choose a size from 2 to ${MAX_ROOM_SIZE}.` });
+    const room = newRoom({ capacity: cap, open: true, hostId: u.id, activity: u.activity });
+    addMember(room, u);
+    broadcastRoom(room);
+    ack?.({ ok: true });
+  });
+
+  // Host (or, in a 1:1 call nobody has opened yet, either person) changes who can join.
+  socket.on('room-settings', ({ open, capacity } = {}, ack) => {
+    const u = me();
+    const room = u && rooms.get(u.roomId);
+    if (!room) return ack?.({ error: 'You’re not in a call.' });
+    if (room.hostId && room.hostId !== u.id) return ack?.({ error: 'Only the host can change this.' });
+    const cap = capacity === undefined ? room.capacity : Number(capacity);
+    if (!Number.isInteger(cap) || cap < 2 || cap > MAX_ROOM_SIZE) return ack?.({ error: `Choose a size from 2 to ${MAX_ROOM_SIZE}.` });
+    if (cap < room.members.length) return ack?.({ error: `There are already ${room.members.length} people here.` });
+    const wasOpen = room.open;
+    if (!room.hostId) room.hostId = u.id; // first to open the call becomes host
+    room.capacity = cap;
+    if (typeof open === 'boolean') room.open = open;
+    if (room.open && !wasOpen) {
+      // The room is matched on the host's activity (or anyone's, if the host has none).
+      room.activity = u.activity || room.members.map((id) => users.get(id)?.activity).find(Boolean) || 'Hanging out';
+      room.profile = analyze(room.activity);
+      for (const id of room.members) io.to(id).emit('room-notice', { text: `${u.name} opened the call to others (up to ${cap} people).` });
+    } else if (!room.open && wasOpen) {
+      for (const id of room.members) io.to(id).emit('room-notice', { text: `${u.name} closed the call to new people.` });
+    }
+    settleRequests(room);
+    broadcastRoom(room);
+    ack?.({ ok: true });
+  });
+
+  socket.on('join-request', ({ roomId } = {}, ack) => {
+    const u = me();
+    const room = rooms.get(roomId);
+    if (!u || u.status !== 'searching') return ack?.({ error: 'Tell us what you’re doing first.' });
+    if (!room || !room.open || room.removed.has(u.accountId)) return ack?.({ error: 'That group isn’t taking new people.' });
+    if (room.members.length >= room.capacity) return ack?.({ error: 'That group is full.' });
+    const members = room.members.map((id) => users.get(id)).filter(Boolean);
+    if (members.some((m) => m.accountId === u.accountId || safety.isBlocked(u.accountId, m.accountId))) {
+      return ack?.({ error: 'That group isn’t taking new people.' });
+    }
+    if (room.joinRequests.has(u.id)) return ack?.({ ok: true });
+    if (u.joinRequests.size >= MAX_PENDING_JOINS) return ack?.({ error: 'Wait for your other requests to be answered first.' });
+    room.joinRequests.set(u.id, setTimeout(() => { declineJoin(room, u.id, 'timeout'); broadcastRoom(room); }, JOIN_REQUEST_TTL_MS));
+    u.joinRequests.add(room.id);
+    const host = users.get(room.hostId);
+    if (host) io.to(host.id).emit('join-request', { from: publicUser(u), score: Math.round(score(host.profile, u.profile) * 100) });
+    broadcastRoom(room);
+    ack?.({ ok: true });
+  });
+
+  socket.on('cancel-join', ({ roomId } = {}) => {
+    const u = me();
+    const room = rooms.get(roomId);
+    if (!u || !room || !room.joinRequests.has(u.id)) return;
+    clearTimeout(room.joinRequests.get(u.id));
+    room.joinRequests.delete(u.id);
+    u.joinRequests.delete(room.id);
+    if (room.hostId) io.to(room.hostId).emit('join-request-cancelled', { from: u.id });
+    broadcastRoom(room);
+  });
+
+  socket.on('join-respond', ({ from, accept } = {}, ack) => {
+    const u = me();
+    const room = u && rooms.get(u.roomId);
+    if (!room || room.hostId !== u.id) return ack?.({ error: 'Only the host can let people in.' });
+    if (!room.joinRequests.has(from)) return ack?.({ error: 'That request has expired.' });
+    const r = users.get(from);
+    if (!accept) {
+      declineJoin(room, from, 'declined');
+      broadcastRoom(room);
+      return ack?.({ ok: true });
+    }
+    if (room.members.length >= room.capacity) return ack?.({ error: 'The call is full. Make room for more people first.' });
+    if (!r || r.status !== 'searching') {
+      declineJoin(room, from, 'closed');
+      broadcastRoom(room);
+      return ack?.({ error: 'They’re no longer available.' });
+    }
+    clearTimeout(room.joinRequests.get(from));
+    room.joinRequests.delete(from);
+    r.joinRequests.delete(room.id);
+    addMember(room, r);
+    for (const id of room.members) io.to(id).emit('room-notice', { text: `${r.name} joined.` });
+    settleRequests(room);
+    broadcastRoom(room);
+    ack?.({ ok: true });
+  });
+
+  socket.on('remove-member', ({ id } = {}, ack) => {
+    const u = me();
+    const room = u && rooms.get(u.roomId);
+    const t = users.get(id);
+    if (!room || room.hostId !== u.id) return ack?.({ error: 'Only the host can remove people.' });
+    if (!t || t.roomId !== room.id || t.id === u.id) return ack?.({ error: 'They’re not in this call.' });
+    room.removed.add(t.accountId); // and they won't see this room in matching again
+    removeMember(room, t, 'removed');
+    io.to(t.id).emit('removed-from-room');
+    ack?.({ ok: true });
+  });
+
   socket.on('leave-room', () => {
     const u = me();
-    if (u?.roomId) leaveRoom(u, 'left');
+    const room = u && rooms.get(u.roomId);
+    if (room) removeMember(room, u, 'left');
   });
 
   socket.on('disconnect', () => {
     const u = me();
     if (!u) return;
-    if (u.roomId) leaveRoom(u, 'disconnected');
+    const room = rooms.get(u.roomId);
+    if (room) removeMember(room, u, 'disconnected');
+    cancelJoinRequests(u);
+    for (const r of rooms.values()) if (r.joinRequests.has(u.id)) declineJoin(r, u.id, 'closed');
     clearRequests(u);
     users.delete(socket.id);
     scheduleRecompute();

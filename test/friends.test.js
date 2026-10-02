@@ -68,7 +68,7 @@ test('friends: mutual yes after a call, presence, invites, removal', async (t) =
 
   // After the call they're "searching" again (they still have an activity).
   const back = friendsUpdate(a, (p) => p.friends.find((f) => f.id === bUser.id)?.status === 'searching');
-  const left = once(a, 'peer-left');
+  const left = once(a, 'room-ended');
   b.emit('leave-room');
   await left;
   assert.strictEqual((await back).friends[0].activity, 'friends test playing guitar');
@@ -84,7 +84,7 @@ test('friends: mutual yes after a call, presence, invites, removal', async (t) =
   const rooms = Promise.all([once(a, 'room-start'), once(b, 'room-start')]);
   assert.deepStrictEqual(await call(b, 'respond-request', { from: a.id, accept: true }), { ok: true });
   const [ra] = await rooms;
-  assert.strictEqual(ra.peer.friend, true);
+  assert.strictEqual(ra.members.find((m) => m.id === b.id).friend, true);
 
   // Offline friends show as offline.
   b.emit('leave-room');

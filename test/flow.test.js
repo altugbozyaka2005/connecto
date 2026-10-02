@@ -29,7 +29,9 @@ test('match → request → accept → room → chat → leave', async (t) => {
   assert.ok((await call(alice, 'respond-request', { from: bob.id, accept: true })).ok);
   const [ra, rb] = await Promise.all([aRoom, bRoom]);
   assert.strictEqual(ra.roomId, rb.roomId);
-  assert.strictEqual(rb.initiator, true);
+  assert.deepStrictEqual(ra.members.map((m) => m.name).sort(), ['Alice S.', 'Bob J.'], 'both see each other from the start');
+  assert.strictEqual(ra.open, false, '1:1 calls start closed');
+  assert.strictEqual(ra.hostId, null, 'no host until someone opens the call');
 
   // Users in a room are hidden from others.
   const carolMatches = once(carol, 'matches');
@@ -37,17 +39,23 @@ test('match → request → accept → room → chat → leave', async (t) => {
   assert.strictEqual((await carolMatches).matches.length, 0);
   assert.ok((await call(carol, 'send-request', { to: alice.id })).error);
 
+  // Once both have media, the later joiner (the requester, Bob) is told to call Alice.
+  const connect = once(bob, 'connect-peer');
+  alice.emit('media-ready');
+  bob.emit('media-ready');
+  assert.deepStrictEqual(await connect, { peerId: alice.id });
+  // Signals are addressed to one member and stamped with the sender.
   const sig = once(alice, 'signal');
-  bob.emit('signal', { ready: true });
-  assert.deepStrictEqual(await sig, { ready: true });
+  bob.emit('signal', { to: alice.id, description: { type: 'offer', sdp: 'x' } });
+  assert.deepStrictEqual(await sig, { description: { type: 'offer', sdp: 'x' }, from: bob.id });
 
   const chat = once(alice, 'chat');
   bob.emit('chat', { text: 'hey <b>there</b>' });
   assert.strictEqual((await chat).text, 'hey <b>there</b>');
 
-  const left = once(alice, 'peer-left');
+  const ended = once(alice, 'room-ended');
   bob.emit('leave-room');
-  assert.strictEqual((await left).reason, 'left');
+  assert.deepStrictEqual(await ended, { reason: 'left', name: 'Bob J.' });
 });
 
 test('two tabs of the same account never match each other', async (t) => {
