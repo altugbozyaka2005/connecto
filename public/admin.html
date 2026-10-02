@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Connecto Admin</title>
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='22' cy='32' r='16' fill='%23ff6b4a'/><circle cx='42' cy='32' r='16' fill='%236c5ce7' fill-opacity='.85'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/admin.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand-sm" href="/"><div class="logo logo-sm" aria-hidden="true"><span></span><span></span></div>Connecto <span class="admin-badge">Admin</span></a>
+    <a class="btn btn-ghost" href="/">Back to app</a>
+  </header>
+
+  <main class="admin-main">
+    <div id="gate" class="admin-gate" hidden>
+      <h2>Admins only</h2>
+      <p id="gate-text"></p>
+      <a class="btn btn-primary" href="/">Go to Connecto</a>
+    </div>
+
+    <div id="console" hidden>
+      <div class="admin-head">
+        <h1>Safety review</h1>
+        <div class="tabs admin-tabs" role="tablist">
+          <button type="button" role="tab" class="tab" data-view="open" aria-selected="true">Open <span class="count" id="count-open"></span></button>
+          <button type="button" role="tab" class="tab" data-view="resolved" aria-selected="false">Resolved</button>
+          <button type="button" role="tab" class="tab" data-view="suspended" aria-selected="false">Suspended</button>
+        </div>
+      </div>
+      <p class="admin-hint" id="view-hint"></p>
+      <div id="list" class="admin-list"></div>
+      <p class="admin-empty" id="empty" hidden></p>
+    </div>
+  </main>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <script src="/admin.js"></script>
+</body>
+</html>

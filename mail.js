@@ -63,4 +63,22 @@ function sendPasswordResetEmail(user, url) {
   });
 }
 
-module.exports = { sendVerificationEmail, sendPasswordResetEmail, outbox, mode };
+function sendAdminReportEmail(to, { reportedName, reportedEmail, reason, details, reporters, autoSuspended }) {
+  const appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  const status = autoSuspended
+    ? `The account was suspended automatically (${reporters} different people reported it within 24 hours). Review it to confirm or lift the suspension.`
+    : `${reporters} ${reporters === 1 ? 'person has' : 'people have'} reported this account.`;
+  return send({
+    to: to.join(', '),
+    subject: `${autoSuspended ? '[Auto-suspended] ' : ''}New report: ${reportedName}`,
+    ...layout({
+      heading: `New report: ${reason}`,
+      intro: `${reportedName} (${reportedEmail}) was reported.${details ? ` Details: “${details}”` : ''} ${status}`,
+      buttonText: 'Review reports',
+      url: `${appUrl}/admin.html`,
+      outro: 'You get this email because your address is listed in ADMIN_EMAILS.',
+    }),
+  });
+}
+
+module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendAdminReportEmail, outbox, mode };

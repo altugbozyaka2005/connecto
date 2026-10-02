@@ -5,6 +5,7 @@ process.env.MAIL_TRANSPORT = 'memory';
 process.env.TURN_SECRET = 'test-turn-secret';
 process.env.TURN_HOST = '203.0.113.7';
 process.env.TURN_TLS_HOST = 'turn.example.com';
+process.env.ADMIN_EMAILS = 'admin@example.com';
 const { io: Client } = require('socket.io-client');
 const { server, io } = require('../server');
 const { outbox } = require('../mail');
@@ -65,4 +66,16 @@ async function signedInSocket(base, overrides) {
 const once = (sock, ev) => new Promise((r) => sock.once(ev, r));
 const call = (sock, ev, p) => new Promise((r) => sock.emit(ev, p, r));
 
-module.exports = { start, stop, request, newUser, signedInSocket, lastEmail, once, call, Client };
+// Puts two signed-in sockets in a room together (b requests, a accepts).
+async function matchUp(a, b, activity) {
+  await call(a, 'set-activity', { activity });
+  await call(b, 'set-activity', { activity });
+  const inc = once(a, 'incoming-request');
+  await call(b, 'send-request', { to: a.id });
+  await inc;
+  const rooms = Promise.all([once(a, 'room-start'), once(b, 'room-start')]);
+  await call(a, 'respond-request', { from: b.id, accept: true });
+  return rooms;
+}
+
+module.exports = { start, stop, request, newUser, signedInSocket, lastEmail, once, call, matchUp, Client };

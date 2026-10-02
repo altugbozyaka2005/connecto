@@ -135,6 +135,7 @@
     document.querySelectorAll('.me-name').forEach((el) => { el.textContent = user.firstName; });
     document.querySelectorAll('.menu-email').forEach((el) => { el.textContent = user.email; });
     $('#greeting').textContent = `Hey ${user.firstName} 👋`;
+    document.querySelectorAll('.admin-link').forEach((el) => { el.hidden = !user.isAdmin; });
   }
 
   function onSignedIn(user) {
@@ -437,7 +438,13 @@
       } else {
         cta.textContent = 'Send request →';
       }
-      card.addEventListener('click', () => onMatchClick(m));
+      const hit = card.querySelector('.match-hit');
+      hit.setAttribute('aria-label', `${cta.textContent}: ${m.name}, ${m.activity}`);
+      hit.addEventListener('click', () => onMatchClick(m));
+      card.querySelector('.card-more').addEventListener('click', (e) => {
+        e.stopPropagation();
+        openCardMenu(e.currentTarget, m);
+      });
       grid.append(card);
     }
     $('#empty-state').toggleAttribute('data-show', matches.length === 0);
@@ -680,9 +687,159 @@
   });
 
   socket.on('peer-left', ({ reason }) => {
-    const name = state.room?.peer.name || 'Your match';
-    exitRoom(reason === 'disconnected' ? `${name} disconnected` : `${name} left the room`);
+    const peer = state.room?.peer;
+    const name = peer?.name || 'Your match';
+    exitRoom();
+    // Something went wrong in the call? Offer to report right away.
+    const el = toast({
+      title: reason === 'disconnected' ? `${name} disconnected` : `${name} left the room`,
+      body: 'You’re back in the match list.',
+      timeout: 10000,
+      actions: peer ? [{ label: 'Report a problem', onClick: () => { dismiss(el); openReport({ lastPeer: true }, name, false); } }] : null,
+    });
   });
+
+  // Another tab of ours blocked this person mid-call.
+  socket.on('room-ended', () => { if (state.room) exitRoom(); });
+
+  socket.on('suspended', () => {
+    signedOut('Your account has been suspended for breaking the community guidelines.');
+  });
+
+  // ---------- Safety: report & block ----------
+
+  function openDialog(id) {
+    const d = $(id);
+    d.querySelector('.form-error') && (d.querySelector('.form-error').textContent = '');
+    d.showModal();
+    return d;
+  }
+  document.querySelectorAll('dialog').forEach((d) => {
+    d.addEventListener('click', (e) => { if (e.target === d || e.target.closest('[data-close]')) d.close(); });
+  });
+
+  // ⋯ menu on match cards
+  let cardMenuFor = null;
+  function openCardMenu(btn, match) {
+    const menu = $('#card-menu');
+    if (cardMenuFor === match.id && !menu.hidden) return closeCardMenu();
+    closeCardMenu();
+    cardMenuFor = match.id;
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    const r = btn.getBoundingClientRect();
+    const w = menu.offsetWidth;
+    menu.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`;
+    menu.style.top = `${r.bottom + 6}px`;
+    menu.onclick = (e) => {
+      const action = e.target.closest('[data-action]')?.dataset.action;
+      if (!action) return;
+      closeCardMenu();
+      if (action === 'report') openReport({ target: match.id }, match.name, false);
+      if (action === 'block') confirmBlock({ target: match.id }, match.name, false);
+    };
+  }
+  function closeCardMenu() {
+    $('#card-menu').hidden = true;
+    document.querySelectorAll('.card-more[aria-expanded="true"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+    cardMenuFor = null;
+  }
+  document.addEventListener('click', (e) => { if (!e.target.closest('#card-menu')) closeCardMenu(); });
+  window.addEventListener('scroll', closeCardMenu, { passive: true });
+  window.addEventListener('resize', closeCardMenu);
+
+  // target: { target: socketId } for a match card, { lastPeer: true } for your current/last call.
+  let reportCtx = null;
+  function openReport(target, name, inCall) {
+    reportCtx = { target, name, inCall };
+    const form = $('#report-form');
+    form.reset();
+    form.querySelectorAll('.report-name').forEach((el) => { el.textContent = name; });
+    form.querySelector('button[type=submit]').disabled = false;
+    openDialog('#report-dialog');
+  }
+
+  $('#report-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const reason = form.elements.reason.value;
+    const err = form.querySelector('.form-error');
+    if (!reason) { err.textContent = 'Choose what’s wrong so we can review it properly.'; return; }
+    const btn = form.querySelector('button[type=submit]');
+    btn.disabled = true;
+    const block = form.elements.block.checked;
+    const res = await emit('report', { ...reportCtx.target, reason, details: form.elements.details.value, block });
+    btn.disabled = false;
+    if (res.error) { err.textContent = res.error; return; }
+    $('#report-dialog').close();
+    if (block && reportCtx.inCall && state.room) exitRoom();
+    toast({
+      title: 'Thanks, your report was sent',
+      body: block ? `You won’t see ${reportCtx.name} again.` : 'We’ll review it as soon as possible.',
+    });
+  });
+
+  let blockCtx = null;
+  function confirmBlock(target, name, inCall) {
+    blockCtx = { target, name, inCall };
+    $('#block-dialog .block-name').textContent = name;
+    openDialog('#block-dialog');
+  }
+
+  $('#block-confirm').addEventListener('click', async () => {
+    const res = await emit('block', blockCtx.target);
+    if (res.error) { $('#block-dialog .form-error').textContent = res.error; return; }
+    $('#block-dialog').close();
+    if (blockCtx.inCall && state.room) exitRoom();
+    toast({ title: `${blockCtx.name} is blocked`, body: 'You won’t see each other again.' });
+  });
+
+  // In-call flag button: report (with "also block" ticked) covers both cases.
+  $('#report-btn').addEventListener('click', () => {
+    if (state.room) openReport({ lastPeer: true }, state.room.peer.name, true);
+  });
+
+  // Blocked people list (account menu)
+  document.querySelectorAll('.blocked-btn').forEach((b) => b.addEventListener('click', async () => {
+    closeMenus();
+    const list = $('#blocked-list');
+    list.textContent = '';
+    $('#blocked-empty').hidden = true;
+    openDialog('#blocked-dialog');
+    try {
+      const { blocks } = await api('GET', '/api/blocks');
+      $('#blocked-empty').hidden = blocks.length > 0;
+      for (const blk of blocks) {
+        const li = document.createElement('li');
+        const av = document.createElement('div');
+        av.className = 'avatar avatar-sm';
+        paintAvatar(av, blk.name, blk.avatar);
+        const name = document.createElement('span');
+        name.className = 'name';
+        name.textContent = blk.name;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost';
+        btn.textContent = 'Unblock';
+        btn.onclick = async () => {
+          btn.disabled = true;
+          try {
+            await api('DELETE', `/api/blocks/${blk.id}`, {});
+            li.remove();
+            if (!list.children.length) $('#blocked-empty').hidden = false;
+          } catch (err) {
+            btn.disabled = false;
+            toast({ title: 'Couldn’t unblock', body: err.message });
+          }
+        };
+        li.append(av, name, btn);
+        list.append(li);
+      }
+    } catch (err) {
+      $('#blocked-empty').textContent = err.message;
+      $('#blocked-empty').hidden = false;
+    }
+  }));
 
   // Chat
   function systemMessage(text) {

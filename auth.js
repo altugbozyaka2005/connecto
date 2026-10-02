@@ -107,7 +107,7 @@ function sessionFromCookieHeader(header) {
   const row = db.prepare(`
     SELECT u.*, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?
   `).get(sessionId);
-  if (!row) return null;
+  if (!row || row.banned_at) return null;
   if (row.expires_at < Date.now()) {
     db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(sessionId);
     return null;
@@ -123,6 +123,23 @@ function setSessionCookie(req, res, token) {
     maxAge: SESSION_TTL_MS,
     path: '/',
   });
+}
+
+// ---------- Admins ----------
+// Admins are listed by email in ADMIN_EMAILS (comma separated) and must have confirmed it.
+
+const adminEmails = () =>
+  (process.env.ADMIN_EMAILS || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+
+function isAdmin(user) {
+  return !!user && !!user.email_verified_at && !user.banned_at && adminEmails().includes(user.email.toLowerCase());
+}
+
+// Only accept JSON bodies on writes: combined with SameSite cookies this blocks
+// cross-site form posts (CSRF).
+function jsonOnly(req, res, next) {
+  if (req.method !== 'GET' && !req.is('application/json')) return res.status(415).json({ error: 'Expected JSON.' });
+  next();
 }
 
 // ---------- Validation ----------
@@ -209,6 +226,7 @@ function selfView(u) {
     gender: u.gender,
     avatar: u.avatar,
     emailVerified: !!u.email_verified_at,
+    isAdmin: isAdmin(u),
   };
 }
 
@@ -242,12 +260,7 @@ function createAuthRouter({ onLogout = () => {}, onSessionsRevoked = () => {} } 
   const router = express.Router();
   router.use(express.json({ limit: '1mb' }));
 
-  // Only accept JSON bodies on writes: combined with SameSite cookies this blocks
-  // cross-site form posts (CSRF).
-  router.use((req, res, next) => {
-    if (req.method !== 'GET' && !req.is('application/json')) return res.status(415).json({ error: 'Expected JSON.' });
-    next();
-  });
+  router.use(jsonOnly);
 
   const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: Number(process.env.AUTH_RATE_LIMIT) || 20 });
 
@@ -296,7 +309,7 @@ function createAuthRouter({ onLogout = () => {}, onSessionsRevoked = () => {} } 
     const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
     const user = EMAIL_RE.test(email) && db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     // Same answer, sent immediately, whether or not the account exists.
-    if (user && !recentlyEmailed(user.id, 'reset')) {
+    if (user && !user.banned_at && !recentlyEmailed(user.id, 'reset')) {
       sendReset(user).catch((err) => console.error('Reset email failed:', err.message));
     }
     res.json({ ok: true });
@@ -307,6 +320,9 @@ function createAuthRouter({ onLogout = () => {}, onSessionsRevoked = () => {} } 
     if (pwError) return res.status(400).json({ error: 'Please choose a stronger password.', fields: { password: pwError } });
     const userId = consumeEmailToken(req.body?.token, 'reset');
     if (!userId) return res.status(400).json({ error: 'This reset link is invalid or has expired. Request a new one.' });
+    if (db.prepare('SELECT banned_at FROM users WHERE id = ?').get(userId)?.banned_at) {
+      return res.status(403).json({ error: 'This account has been suspended for breaking the community guidelines.' });
+    }
     // Receiving the email also proves they own the address.
     db.prepare('UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?), last_login_at = ? WHERE id = ?')
       .run(hashPassword(req.body.password), Date.now(), Date.now(), userId);
@@ -324,6 +340,7 @@ function createAuthRouter({ onLogout = () => {}, onSessionsRevoked = () => {} } 
     const user = email && db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     const ok = verifyPassword(password, user ? user.password_hash : DUMMY_HASH);
     if (!user || !ok) return res.status(401).json({ error: 'Incorrect email or password.' });
+    if (user.banned_at) return res.status(403).json({ error: 'This account has been suspended for breaking the community guidelines.' });
     db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(Date.now(), user.id);
     setSessionCookie(req, res, createSession(user.id));
     res.json({ user: selfView(user) });
@@ -369,4 +386,7 @@ function socketAuth(socket, next) {
   next();
 }
 
-module.exports = { createAuthRouter, socketAuth, displayName, validAvatar, validateRegistration, ageOn };
+module.exports = {
+  createAuthRouter, socketAuth, sessionFromCookieHeader, jsonOnly, isAdmin, adminEmails,
+  displayName, validAvatar, validateRegistration, ageOn,
+};

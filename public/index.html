@@ -187,6 +187,8 @@
           <div class="menu">
             <p class="menu-email"></p>
             <button type="button" class="menu-item change-photo-btn">Change photo</button>
+            <button type="button" class="menu-item blocked-btn">Blocked people</button>
+            <a class="menu-item admin-link" href="/admin.html" hidden>Review reports</a>
             <button type="button" class="menu-item logout-btn">Log out</button>
           </div>
         </details>
@@ -220,6 +222,8 @@
           <div class="menu">
             <p class="menu-email"></p>
             <button type="button" class="menu-item change-photo-btn">Change photo</button>
+            <button type="button" class="menu-item blocked-btn">Blocked people</button>
+            <a class="menu-item admin-link" href="/admin.html" hidden>Review reports</a>
             <button type="button" class="menu-item logout-btn">Log out</button>
           </div>
         </details>
@@ -286,6 +290,9 @@
               <svg viewBox="0 0 24 24" class="on"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4Z"/></svg>
               <svg viewBox="0 0 24 24" class="off"><path fill="currentColor" d="M21 6.5 17 10.5V7a1 1 0 0 0-1-1H9.82L21 17.18V6.5ZM3.27 2 2 3.27 4.73 6H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12c.21 0 .39-.08.55-.18L19.73 21 21 19.73 3.27 2Z"/></svg>
             </button>
+            <button class="ctrl" id="report-btn" type="button" title="Report or block" aria-label="Report or block">
+              <svg viewBox="0 0 24 24"><path fill="currentColor" d="M14.4 6 14 4H5v17h2v-7h5.6l.4 2h7V6h-5.6Z"/></svg>
+            </button>
             <button class="ctrl ctrl-leave" id="leave-btn" type="button" title="Leave room">
               <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85a1 1 0 0 1-1.41-.02L.29 13.08a1 1 0 0 1 0-1.41C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67a1 1 0 0 1 0 1.41l-2.48 2.47a1 1 0 0 1-1.41.02 11.3 11.3 0 0 0-2.67-1.85 1 1 0 0 1-.56-.9v-3.1A15.1 15.1 0 0 0 12 9Z"/></svg>
               <span>Leave</span>
@@ -314,7 +321,11 @@
   <div class="toasts" id="toasts" aria-live="polite"></div>
 
   <template id="match-card-tpl">
-    <button class="match-card" type="button">
+    <article class="match-card">
+      <button class="match-hit" type="button"></button>
+      <button class="card-more" type="button" aria-label="More options" aria-haspopup="menu">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
+      </button>
       <div class="avatar avatar-lg"></div>
       <div class="match-info">
         <p class="match-name"></p>
@@ -324,8 +335,66 @@
         <span class="score"><span class="score-bar"><i></i></span><b></b></span>
         <span class="match-cta"></span>
       </div>
-    </button>
+    </article>
   </template>
+
+  <!-- Match card ⋯ menu -->
+  <div class="menu popover" id="card-menu" role="menu" hidden>
+    <button type="button" class="menu-item" data-action="report" role="menuitem">Report…</button>
+    <button type="button" class="menu-item logout-like" data-action="block" role="menuitem">Block</button>
+  </div>
+
+  <!-- Report -->
+  <dialog class="dialog" id="report-dialog" aria-labelledby="report-title">
+    <form id="report-form" novalidate>
+      <h3 id="report-title">Report <span class="report-name"></span></h3>
+      <p class="form-intro">Reports are confidential: <span class="report-name"></span> won't know it was you. We review every report.</p>
+      <fieldset class="reasons">
+        <legend>What's wrong?</legend>
+        <label><input type="radio" name="reason" value="nudity" /> Nudity or sexual content</label>
+        <label><input type="radio" name="reason" value="harassment" /> Harassment or bullying</label>
+        <label><input type="radio" name="reason" value="hate" /> Hate speech or symbols</label>
+        <label><input type="radio" name="reason" value="violence" /> Violence, threats or self-harm</label>
+        <label><input type="radio" name="reason" value="underage" /> Appears to be under 18</label>
+        <label><input type="radio" name="reason" value="spam" /> Spam, scam or advertising</label>
+        <label><input type="radio" name="reason" value="other" /> Something else</label>
+      </fieldset>
+      <label class="field">
+        <span>Anything else we should know? <em>(optional)</em></span>
+        <textarea name="details" rows="3" maxlength="500"></textarea>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="block" checked />
+        <span>Also block <span class="report-name"></span>: you won't see each other again.</span>
+      </label>
+      <p class="form-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-danger">Send report</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Confirm block -->
+  <dialog class="dialog dialog-sm" id="block-dialog" aria-labelledby="block-title">
+    <h3 id="block-title">Block <span class="block-name"></span>?</h3>
+    <p class="form-intro">You won't see each other in matches, and any call or request between you ends. They won't be told. You can unblock later from your account menu.</p>
+    <p class="form-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+      <button type="button" class="btn btn-danger" id="block-confirm">Block</button>
+    </div>
+  </dialog>
+
+  <!-- Blocked people -->
+  <dialog class="dialog" id="blocked-dialog" aria-labelledby="blocked-title">
+    <h3 id="blocked-title">Blocked people</h3>
+    <ul class="blocked-list" id="blocked-list"></ul>
+    <p class="form-intro" id="blocked-empty" hidden>You haven't blocked anyone.</p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" data-close>Close</button>
+    </div>
+  </dialog>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="/app.js"></script>

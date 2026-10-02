@@ -7,10 +7,14 @@ const { analyze, score } = require('./matcher');
 const db = require('./db');
 const { createAuthRouter, socketAuth, displayName } = require('./auth');
 const { iceServersFor } = require('./turn');
+const safety = require('./safety');
 
 const PORT = process.env.PORT || 3000;
 const MAX_MATCHES = 12;
 const MIN_SCORE = 0.15;
+// How long after a call you can still report or block the person you were talking to.
+const LAST_PEER_TTL_MS = 30 * 60 * 1000;
+const MAX_TRANSCRIPT = 100;
 
 const app = express();
 // Set TRUST_PROXY=1 when running behind a load balancer so rate limits see real client IPs.
@@ -33,17 +37,26 @@ app.use('/api/auth', createAuthRouter({
   // Password reset revokes every session, so drop every open tab for that account.
   onSessionsRevoked: (accountId) => io.in(`account:${accountId}`).disconnectSockets(true),
 }));
+app.use('/api/blocks', safety.createBlocksRouter());
+app.use('/api/admin', safety.createAdminRouter());
 app.get('/health', (_req, res) => res.json({ ok: true, online: users.size }));
 
 const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 1e6 });
 io.use(socketAuth);
 
+// Suspended accounts are told why, then disconnected (their sessions are already deleted).
+safety.setSuspendHandler((accountId) => {
+  io.to(`account:${accountId}`).emit('suspended');
+  io.in(`account:${accountId}`).disconnectSockets();
+});
+
 // socket.id -> user (one entry per open tab)
 // user: { id, accountId, name, avatar, activity, profile, status: 'idle'|'searching'|'in-room',
-//         roomId, outgoing: Set<id>, incoming: Set<id>, joinedAt }
+//         roomId, outgoing: Set<id>, incoming: Set<id>, joinedAt,
+//         lastPeer: { accountId, name, activity, chat, at } }   <- for reporting after a call
 const users = new Map();
-// roomId -> { id, members: [id, id], activity, createdAt }
+// roomId -> { id, members: [id, id], chat: [{ name, text, at }], createdAt }
 const rooms = new Map();
 
 const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -59,6 +72,7 @@ function matchesFor(user) {
   for (const other of users.values()) {
     // Skip yourself, including your own other tabs.
     if (other.accountId === user.accountId || other.status !== 'searching') continue;
+    if (safety.isBlocked(user.accountId, other.accountId)) continue;
     const s = score(user.profile, other.profile);
     if (s >= MIN_SCORE) {
       results.push({
@@ -116,10 +130,14 @@ function openRoom(a, b) {
   clearRequests(a);
   clearRequests(b);
   const roomId = crypto.randomUUID();
-  rooms.set(roomId, { id: roomId, members: [a.id, b.id], createdAt: Date.now() });
-  for (const u of [a, b]) {
+  // The server relays every chat message, so it keeps them while the room lasts; they're only
+  // ever stored if someone files a report from this call.
+  const chat = [];
+  rooms.set(roomId, { id: roomId, members: [a.id, b.id], chat, createdAt: Date.now() });
+  for (const [u, peer] of [[a, b], [b, a]]) {
     u.status = 'in-room';
     u.roomId = roomId;
+    u.lastPeer = { accountId: peer.accountId, name: peer.name, activity: peer.activity, chat, at: Date.now() };
     io.sockets.sockets.get(u.id)?.join(roomId);
   }
   // The requester (b accepted a's request) creates the WebRTC offer.
@@ -139,6 +157,47 @@ function leaveRoom(user, reason = 'left') {
     m.roomId = null;
     m.status = m.activity ? 'searching' : 'idle';
     if (m.id !== user.id) io.to(m.id).emit('peer-left', { reason });
+  }
+  scheduleRecompute();
+}
+
+// ---------- Blocking ----------
+
+// Who a report/block is about: the person from your current or most recent call
+// ({ lastPeer: true }), or someone on your match list ({ target: socketId }).
+function resolveTarget(u, { target, lastPeer } = {}) {
+  if (lastPeer) {
+    const p = u.lastPeer;
+    if (!p || (!u.roomId && Date.now() - p.at > LAST_PEER_TTL_MS)) return null;
+    return { accountId: p.accountId, context: 'call', activity: p.activity, transcript: p.chat };
+  }
+  const t = users.get(target);
+  if (!t || t.accountId === u.accountId) return null;
+  return { accountId: t.accountId, context: 'match', activity: t.activity, transcript: null };
+}
+
+// Records the block, ends any call between the two accounts and cancels pending requests.
+// The blocked person is only told the other person "left" or is "no longer available".
+function applyBlock(blockerAccountId, blockedAccountId) {
+  safety.block(blockerAccountId, blockedAccountId);
+  const mine = [...users.values()].filter((x) => x.accountId === blockerAccountId);
+  const theirs = [...users.values()].filter((x) => x.accountId === blockedAccountId);
+  for (const x of mine) {
+    for (const y of theirs) {
+      if (x.roomId && x.roomId === y.roomId) {
+        leaveRoom(x, 'left');
+        io.to(x.id).emit('room-ended');
+      }
+      if (x.outgoing.delete(y.id)) {
+        y.incoming.delete(x.id);
+        io.to(y.id).emit('request-cancelled', { from: x.id });
+      }
+      if (x.incoming.delete(y.id)) {
+        y.outgoing.delete(x.id);
+        io.to(x.id).emit('request-cancelled', { from: y.id });
+        io.to(y.id).emit('request-declined', { by: x.id, name: x.name, reason: 'unavailable' });
+      }
+    }
   }
   scheduleRecompute();
 }
@@ -202,7 +261,9 @@ io.on('connection', (socket) => {
     const u = me();
     const t = users.get(to);
     if (!u || u.status !== 'searching') return ack?.({ error: 'You are not searching.' });
-    if (!t || t.status !== 'searching' || t.accountId === u.accountId) return ack?.({ error: 'That person is no longer available.' });
+    if (!t || t.status !== 'searching' || t.accountId === u.accountId || safety.isBlocked(u.accountId, t.accountId)) {
+      return ack?.({ error: 'That person is no longer available.' });
+    }
     // If they already asked us, treat this as an accept.
     if (u.incoming.has(t.id)) {
       openRoom(t, u);
@@ -234,7 +295,7 @@ io.on('connection', (socket) => {
     if (!u || !u.incoming.has(from)) return ack?.({ error: 'That request has expired.' });
     u.incoming.delete(from);
     f?.outgoing.delete(u.id);
-    if (!f || f.status !== 'searching') {
+    if (!f || f.status !== 'searching' || safety.isBlocked(u.accountId, f.accountId)) {
       scheduleRecompute();
       return ack?.({ error: 'That person is no longer available.' });
     }
@@ -261,7 +322,37 @@ io.on('connection', (socket) => {
     const u = me();
     const msg = clean(text, 1000);
     if (!u || !u.roomId || !msg) return;
-    io.to(u.roomId).emit('chat', { from: u.id, name: u.name, text: msg, at: Date.now() });
+    const at = Date.now();
+    const room = rooms.get(u.roomId);
+    room?.chat.push({ name: u.name, text: msg, at });
+    if (room && room.chat.length > MAX_TRANSCRIPT) room.chat.shift();
+    io.to(u.roomId).emit('chat', { from: u.id, name: u.name, text: msg, at });
+  });
+
+  socket.on('block', (payload = {}, ack) => {
+    const u = me();
+    const t = u && resolveTarget(u, payload);
+    if (!t) return ack?.({ error: 'That person is no longer available to block.' });
+    applyBlock(u.accountId, t.accountId);
+    ack?.({ ok: true });
+  });
+
+  socket.on('report', (payload = {}, ack) => {
+    const u = me();
+    const t = u && resolveTarget(u, payload);
+    if (!t) return ack?.({ error: 'That person is no longer available to report.' });
+    const result = safety.createReport({
+      reporterId: u.accountId,
+      reportedId: t.accountId,
+      reason: payload.reason,
+      details: payload.details,
+      context: t.context,
+      activity: t.activity,
+      transcript: t.transcript,
+    });
+    if (result.error) return ack?.({ error: result.error });
+    if (payload.block) applyBlock(u.accountId, t.accountId);
+    ack?.({ ok: true });
   });
 
   socket.on('leave-room', () => {

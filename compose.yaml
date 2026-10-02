@@ -5,6 +5,7 @@
 #   TURN_SECRET=...      shared with coturn; generated on first deploy
 #   SMTP_URL=...         e.g. smtps://resend:API_KEY@smtp.resend.com:465
 #   MAIL_FROM=...        e.g. Connecto <no-reply@connecto.clientchase.com>
+#   ADMIN_EMAILS=...     accounts allowed to review reports, e.g. you@example.com
 services:
   connecto:
     build: .
@@ -21,6 +22,7 @@ services:
       TURN_SECRET: ${TURN_SECRET:?TURN_SECRET must be set in .env}
       SMTP_URL: ${SMTP_URL:-}
       MAIL_FROM: ${MAIL_FROM:-Connecto <no-reply@connecto.clientchase.com>}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}     # who can open /admin.html (comma separated)
     volumes:
       - connecto_data:/data
     # No published ports: Traefik reaches the container directly over Docker's network.
