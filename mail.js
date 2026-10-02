@@ -29,8 +29,15 @@ function layout({ heading, intro, buttonText, url, outro }) {
   return { html, text };
 }
 
+// "altug@gmail.com" -> "al***@gmail.com": enough to tell sends apart in logs without storing addresses.
+const mask = (addr) => String(addr).split(',').map((a) => a.trim().replace(/^(.{0,2}).*@/, '$1***@')).join(', ');
+
 async function send({ to, subject, html, text }) {
-  if (mode === 'smtp') return transport.sendMail({ from: FROM, to, subject, html, text });
+  if (mode === 'smtp') {
+    const info = await transport.sendMail({ from: FROM, to, subject, html, text });
+    console.log(`[mail] sent "${subject}" to ${mask(to)} (${info.response})`);
+    return info;
+  }
   if (mode === 'memory') return outbox.push({ to, subject, html, text });
   console.log(`\n[mail] To: ${to}\n[mail] Subject: ${subject}\n${text}`);
 }
