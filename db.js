@@ -67,6 +67,24 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS reports_reported ON reports(reported_id, status);
   CREATE INDEX IF NOT EXISTS reports_reporter ON reports(reporter_id, created_at);
+
+  -- Friendships are mutual and stored once, with user_a < user_b.
+  CREATE TABLE IF NOT EXISTS friendships (
+    user_a     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_b     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_a, user_b),
+    CHECK (user_a < user_b)
+  );
+
+  -- "Add as friend?" said by one side, waiting for the other.
+  CREATE TABLE IF NOT EXISTS friend_requests (
+    from_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    to_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (from_id, to_id)
+  );
+  CREATE INDEX IF NOT EXISTS friend_requests_to ON friend_requests(to_id);
 `);
 
 // Migrations for databases created before a column existed.
@@ -74,5 +92,10 @@ const columns = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => 
 if (!columns.has('email_verified_at')) db.exec('ALTER TABLE users ADD COLUMN email_verified_at INTEGER');
 if (!columns.has('banned_at')) db.exec('ALTER TABLE users ADD COLUMN banned_at INTEGER');
 if (!columns.has('ban_reason')) db.exec('ALTER TABLE users ADD COLUMN ban_reason TEXT');
+// Profile extras (all optional).
+if (!columns.has('bio')) db.exec('ALTER TABLE users ADD COLUMN bio TEXT');
+if (!columns.has('interests')) db.exec('ALTER TABLE users ADD COLUMN interests TEXT'); // JSON array of strings
+if (!columns.has('city')) db.exec('ALTER TABLE users ADD COLUMN city TEXT');
+if (!columns.has('timezone')) db.exec('ALTER TABLE users ADD COLUMN timezone TEXT'); // IANA name, e.g. Europe/Istanbul
 
 module.exports = db;

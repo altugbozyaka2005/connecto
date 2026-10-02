@@ -43,6 +43,20 @@
     }
   }
 
+  const MY_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+
+  // "Istanbul · 21:05 their time" (time only when they're in a different time zone).
+  function metaLine(p) {
+    const parts = [];
+    if (p.city) parts.push(p.city);
+    if (p.timezone && p.timezone !== MY_TZ) {
+      try {
+        parts.push(`${new Intl.DateTimeFormat([], { timeZone: p.timezone, hour: 'numeric', minute: '2-digit' }).format(new Date())} their time`);
+      } catch { /* unknown zone */ }
+    }
+    return parts.join(' · ');
+  }
+
   function emit(event, payload) {
     return new Promise((resolve) => socket.emit(event, payload, (res) => resolve(res || {})));
   }
@@ -149,6 +163,12 @@
     if (!user.emailVerified) return showVerify(user);
     stopVerifyPolling();
     if (!socket.connected) socket.connect();
+    // Keep the stored time zone in sync with this device (people travel).
+    if (MY_TZ && user.timezone !== MY_TZ) {
+      api('PATCH', '/api/auth/me', { timezone: MY_TZ })
+        .then(({ user: u }) => { setUser(u); socket.emit('refresh-profile'); })
+        .catch(() => {});
+    }
     $('#activity-input').value = state.activity;
     show('screen-activity');
     $('#activity-input').focus();
@@ -428,8 +448,21 @@
     for (const m of matches) {
       const card = tpl.content.firstElementChild.cloneNode(true);
       paintAvatar(card.querySelector('.avatar'), m.name, m.avatar);
-      card.querySelector('.match-name').textContent = m.name;
+      card.querySelector('.name-text').textContent = m.name;
+      card.querySelector('.pill-friend').hidden = !m.friend;
+      card.querySelector('.match-meta').textContent = metaLine(m);
       card.querySelector('.match-activity').textContent = m.activity;
+      card.querySelector('.match-bio').textContent = m.bio || '';
+      const chips = card.querySelector('.mini-chips');
+      const shared = new Set((m.shared || []).map((x) => x.toLowerCase()));
+      // Shared interests first, highlighted.
+      for (const i of [...(m.interests || [])].sort((a, b) => shared.has(b.toLowerCase()) - shared.has(a.toLowerCase()))) {
+        const c = document.createElement('span');
+        c.className = 'mini-chip' + (shared.has(i.toLowerCase()) ? ' shared' : '');
+        c.textContent = i;
+        if (shared.has(i.toLowerCase())) c.title = 'You both like this';
+        chips.append(c);
+      }
       card.querySelector('.score-bar i').style.width = `${m.score}%`;
       card.querySelector('.score b').textContent = `${m.score}%`;
       const cta = card.querySelector('.match-cta');
@@ -469,11 +502,14 @@
     if (!state.room) renderMatches(matches);
   });
 
-  socket.on('incoming-request', ({ from, score }) => {
+  socket.on('incoming-request', ({ from, score, friend }) => {
     if (state.room || state.incoming.has(from.id)) return;
+    const details = [metaLine(from), from.bio].filter(Boolean).join(' · ');
     const el = toast({
-      title: `${from.name} wants to join you`,
-      body: `“${from.activity}” · ${score}% match`,
+      title: friend ? `Your friend ${from.name} is inviting you to a call` : `${from.name} wants to join you`,
+      body: friend
+        ? [from.activity && `They're doing “${from.activity}”`, details].filter(Boolean).join(' · ')
+        : [`“${from.activity}” · ${score}% match`, details].filter(Boolean).join(' · '),
       avatarOf: from,
       timeout: 0,
       actions: [
@@ -530,14 +566,24 @@
     $('#chat-log').textContent = '';
     $('#peer-name').textContent = room.peer.name;
     $('#remote-label').textContent = room.peer.name;
-    $('#room-activity').textContent = state.activity === room.peer.activity
-      ? state.activity
-      : `${state.activity}  ·  ${room.peer.activity}`;
+    // A friend invite can start a call before either person has typed an activity.
+    const acts = [...new Set([state.activity, room.peer.activity].filter(Boolean))];
+    $('#room-activity').textContent = acts.join('  ·  ') || 'Hanging out';
+    state.friendRequested = false;
+    $('#add-friend-btn').hidden = !!room.peer.friend;
+    $('#add-friend-btn').disabled = false;
+    $('#add-friend-btn').textContent = 'Add friend';
     paintAvatar($('#peer-avatar'), room.peer.name, room.peer.avatar);
     paintAvatar($('#local-avatar'), state.user.displayName, state.user.avatar);
     $('#remote-status').textContent = 'Connecting…';
     $('#remote-placeholder').hidden = false;
-    systemMessage(`You matched with ${room.peer.name}! They're doing “${room.peer.activity}”.`);
+    const peer = room.peer;
+    systemMessage(peer.friend
+      ? `You're in a call with your friend ${peer.name}.`
+      : `You matched with ${peer.name}! They're doing “${peer.activity}”.`);
+    const about = [peer.city && `From ${peer.city}`, peer.interests?.length && `Into ${peer.interests.join(', ')}`].filter(Boolean).join(' · ');
+    if (about) systemMessage(about);
+    if (peer.bio) systemMessage(`“${peer.bio}”`);
     show('screen-room');
     await startCall(room.initiator);
   });
@@ -681,26 +727,58 @@
     stopMedia();
     state.room = null;
     $('#chat-panel').removeAttribute('data-open');
-    show('screen-matches');
+    // Calls from a friend invite can start before you've typed an activity.
+    show(state.activity ? 'screen-matches' : 'screen-activity');
     if (notice) toast({ title: notice, body: 'You’re back in the match list.' });
   }
 
   $('#leave-btn').addEventListener('click', () => {
+    const peer = state.room?.peer;
     socket.emit('leave-room');
     exitRoom();
+    if (peer) postCallPrompt(peer, `Call with ${peer.name} ended`);
+  });
+
+  // After a call: offer "Add friend" (unless already friends/asked) and "Report a problem".
+  function postCallPrompt(peer, title) {
+    const actions = [];
+    if (!peer.friend && !state.friendRequested) {
+      actions.push({ label: 'Add friend', cls: 'btn-good', onClick: (el) => { dismiss(el); addFriend(peer.name); } });
+    }
+    actions.push({ label: 'Report a problem', onClick: (el) => { dismiss(el); openReport({ lastPeer: true }, peer.name, false); } });
+    toast({
+      title,
+      body: !peer.friend && !state.friendRequested ? `Enjoyed it? Add ${peer.name} as a friend to meet again.` : 'You’re back in the match list.',
+      avatarOf: peer,
+      timeout: 15000,
+      actions,
+    });
+  }
+
+  async function addFriend(name) {
+    const res = await emit('friend-request');
+    if (res.error) return toast({ title: 'Couldn’t add friend', body: res.error });
+    state.friendRequested = true;
+    const btn = $('#add-friend-btn');
+    if (res.status === 'friends') {
+      btn.hidden = true;
+      toast({ title: `You and ${name} are now friends 🎉`, body: 'Find them anytime under Friends.' });
+    } else {
+      btn.textContent = 'Friend request sent ✓';
+      btn.disabled = true;
+      toast({ title: 'Friend request sent', body: `If ${name} adds you too, you’ll become friends.`, timeout: 3000 });
+    }
+  }
+
+  $('#add-friend-btn').addEventListener('click', () => {
+    if (state.room) addFriend(state.room.peer.name);
   });
 
   socket.on('peer-left', ({ reason }) => {
     const peer = state.room?.peer;
     const name = peer?.name || 'Your match';
     exitRoom();
-    // Something went wrong in the call? Offer to report right away.
-    const el = toast({
-      title: reason === 'disconnected' ? `${name} disconnected` : `${name} left the room`,
-      body: 'You’re back in the match list.',
-      timeout: 10000,
-      actions: peer ? [{ label: 'Report a problem', onClick: () => { dismiss(el); openReport({ lastPeer: true }, name, false); } }] : null,
-    });
+    if (peer) postCallPrompt(peer, reason === 'disconnected' ? `${name} disconnected` : `${name} left the call`);
   });
 
   // Another tab of ours blocked this person mid-call.
@@ -708,6 +786,186 @@
 
   socket.on('suspended', () => {
     signedOut('Your account has been suspended for breaking the community guidelines.');
+  });
+
+  // ---------- Friends ----------
+
+  state.friends = { friends: [], requests: [] };
+  const STATUS_TEXT = { searching: null, online: 'Online', 'in-call': 'In a call', offline: 'Offline' };
+
+  function personRow(p, extraClass) {
+    const li = document.createElement('li');
+    const av = document.createElement('div');
+    av.className = `avatar avatar-sm ${extraClass || ''}`;
+    paintAvatar(av, p.name, p.avatar);
+    if (p.status) av.dataset.status = p.status;
+    const who = document.createElement('div');
+    who.className = 'who';
+    const strong = document.createElement('strong');
+    strong.textContent = p.name;
+    who.append(strong);
+    li.append(av, who);
+    return { li, who };
+  }
+
+  function button(label, cls, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.textContent = label;
+    b.onclick = onClick;
+    return b;
+  }
+
+  function renderFriends() {
+    const { friends, requests } = state.friends;
+    document.querySelectorAll('.friends-badge').forEach((b) => {
+      b.textContent = requests.length;
+      b.hidden = !requests.length;
+    });
+
+    const reqList = $('#friend-requests');
+    reqList.textContent = '';
+    $('#friend-requests-section').hidden = !requests.length;
+    for (const r of requests) {
+      const { li } = personRow(r);
+      li.append(
+        button('Not now', 'btn btn-ghost', () => emit('friend-respond', { id: r.id, accept: false })),
+        button('Accept', 'btn btn-good', async () => {
+          const res = await emit('friend-respond', { id: r.id, accept: true });
+          if (!res.error) toast({ title: `You and ${r.name} are now friends 🎉` });
+        }),
+      );
+      reqList.append(li);
+    }
+
+    const list = $('#friend-list');
+    list.textContent = '';
+    $('#friends-empty').hidden = friends.length > 0 || requests.length > 0;
+    for (const f of friends) {
+      const { li, who } = personRow(f, 'presence');
+      const line = document.createElement('span');
+      line.textContent = f.status === 'searching' ? `Doing “${f.activity}”` : [STATUS_TEXT[f.status], metaLine(f)].filter(Boolean).join(' · ');
+      who.append(line);
+      if (f.status === 'online' || f.status === 'searching') {
+        const invite = button('Invite to call', 'btn btn-primary', async () => {
+          invite.disabled = true;
+          const res = await emit('friend-invite', { id: f.id });
+          if (res.error) { invite.disabled = false; return toast({ title: 'Couldn’t invite', body: res.error }); }
+          if (!res.matched) {
+            invite.textContent = 'Invited ✓';
+            toast({ title: `Invite sent to ${f.name}`, body: 'You’ll join a call as soon as they accept.', timeout: 3000 });
+          }
+          $('#friends-dialog').close();
+        });
+        invite.disabled = !!state.room;
+        li.append(invite);
+      }
+      li.append(button('✕', 'icon-btn', () => {
+        if (confirm(`Remove ${f.name} from your friends? They won't be told.`)) emit('friend-remove', { id: f.id });
+      }));
+      li.lastChild.setAttribute('aria-label', `Remove ${f.name}`);
+      li.lastChild.title = 'Remove friend';
+      list.append(li);
+    }
+  }
+
+  socket.on('friends', (payload) => {
+    state.friends = payload;
+    renderFriends();
+  });
+
+  socket.on('friend-request', (from) => {
+    const el = toast({
+      title: `${from.name} wants to be friends`,
+      body: 'Become friends to see when they’re online and call them directly.',
+      avatarOf: from,
+      timeout: 20000,
+      actions: [
+        { label: 'Not now', onClick: () => { dismiss(el); emit('friend-respond', { id: from.id, accept: false }); } },
+        { label: 'Accept', cls: 'btn-good', onClick: async () => {
+          dismiss(el);
+          const res = await emit('friend-respond', { id: from.id, accept: true });
+          if (!res.error) toast({ title: `You and ${from.name} are now friends 🎉` });
+        } },
+      ],
+    });
+  });
+
+  socket.on('friend-added', ({ name }) => {
+    if (state.room && state.room.peer.name === name) $('#add-friend-btn').hidden = true;
+    toast({ title: `You and ${name} are now friends 🎉`, body: 'Find them anytime under Friends.' });
+  });
+
+  document.querySelectorAll('.friends-btn').forEach((b) => b.addEventListener('click', () => {
+    renderFriends();
+    openDialog('#friends-dialog');
+  }));
+
+  // ---------- Edit profile ----------
+
+  let draftTags = [];
+  function renderTags() {
+    const box = $('#tags');
+    box.textContent = '';
+    draftTags.forEach((t, i) => {
+      const chip = document.createElement('span');
+      chip.className = 'tag';
+      chip.textContent = t;
+      const x = button('×', '', () => { draftTags.splice(i, 1); renderTags(); });
+      x.setAttribute('aria-label', `Remove ${t}`);
+      chip.append(x);
+      box.append(chip);
+    });
+    $('#tag-entry').disabled = draftTags.length >= 5;
+    $('#tag-entry').placeholder = draftTags.length >= 5 ? 'Up to 5 interests' : 'Type and press Enter';
+  }
+
+  function addTag() {
+    const input = $('#tag-entry');
+    const t = input.value.replace(/,/g, ' ').trim().replace(/^#/, '');
+    if (t && draftTags.length < 5 && !draftTags.some((x) => x.toLowerCase() === t.toLowerCase())) draftTags.push(t);
+    input.value = '';
+    renderTags();
+  }
+  $('#tag-entry').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTag(); }
+    if (e.key === 'Backspace' && !e.target.value && draftTags.length) { draftTags.pop(); renderTags(); }
+  });
+  $('#tag-input').addEventListener('click', () => $('#tag-entry').focus());
+
+  const bioInput = $('#profile-form').elements.bio;
+  bioInput.addEventListener('input', () => { $('#bio-count').textContent = bioInput.value.length; });
+
+  document.querySelectorAll('.edit-profile-btn').forEach((b) => b.addEventListener('click', () => {
+    closeMenus();
+    const form = $('#profile-form');
+    clearFormErrors(form);
+    form.elements.bio.value = state.user.bio || '';
+    form.elements.city.value = state.user.city || '';
+    $('#bio-count').textContent = form.elements.bio.value.length;
+    $('#tz-label').textContent = MY_TZ || 'unknown';
+    draftTags = [...(state.user.interests || [])];
+    renderTags();
+    openDialog('#profile-dialog');
+  }));
+
+  $('#profile-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const form = e.target;
+    if ($('#tag-entry').value.trim()) addTag(); // don't lose a half-typed interest
+    submitWith(form, async () => {
+      const { user } = await api('PATCH', '/api/auth/me', {
+        bio: form.elements.bio.value,
+        interests: draftTags,
+        city: form.elements.city.value,
+        timezone: MY_TZ,
+      });
+      setUser(user);
+      socket.emit('refresh-profile');
+      $('#profile-dialog').close();
+      toast({ title: 'Profile saved', timeout: 2500 });
+    });
   });
 
   // ---------- Safety: report & block ----------

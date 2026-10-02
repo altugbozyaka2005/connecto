@@ -227,7 +227,59 @@ function selfView(u) {
     avatar: u.avatar,
     emailVerified: !!u.email_verified_at,
     isAdmin: isAdmin(u),
+    ...profileExtras(u),
   };
+}
+
+// ---------- Profile extras (bio, interests, city, time zone) ----------
+// Shown to other people on match cards, so they're length-limited and stripped of control chars.
+
+const MAX_INTERESTS = 5;
+
+function profileExtras(u) {
+  let interests = [];
+  try { interests = JSON.parse(u.interests || '[]'); } catch { /* corrupt -> empty */ }
+  return { bio: u.bio || '', interests, city: u.city || '', timezone: u.timezone || '' };
+}
+
+const tidy = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
+
+function validTimezone(tz) {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Returns { errors, value } with only the fields present in `body`.
+function validateProfile(body = {}) {
+  const errors = {};
+  const value = {};
+  if ('bio' in body) {
+    if (typeof body.bio === 'string' && body.bio.length > 200) errors.bio = 'Keep your bio under 200 characters.';
+    else value.bio = tidy(body.bio, 200) || null;
+  }
+  if ('city' in body) value.city = tidy(body.city, 60) || null;
+  if ('timezone' in body) {
+    const tz = tidy(body.timezone, 64);
+    if (tz && !validTimezone(tz)) errors.timezone = 'Unknown time zone.';
+    else value.timezone = tz || null;
+  }
+  if ('interests' in body) {
+    const list = Array.isArray(body.interests) ? body.interests : [];
+    const seen = new Set();
+    const clean = [];
+    for (const raw of list) {
+      const t = tidy(raw, 24).replace(/^#/, '');
+      const key = t.toLowerCase();
+      if (t && !seen.has(key)) { seen.add(key); clean.push(t); }
+    }
+    if (clean.length > MAX_INTERESTS) errors.interests = `Pick up to ${MAX_INTERESTS} interests.`;
+    else value.interests = JSON.stringify(clean);
+  }
+  return { errors, value };
 }
 
 // Strangers only see first name + last initial.
@@ -377,6 +429,12 @@ function createAuthRouter({ onLogout = () => {}, onSessionsRevoked = () => {} } 
       if (avatar !== null && !validAvatar(avatar)) return res.status(400).json({ error: 'That image could not be used.' });
       db.prepare('UPDATE users SET avatar = ? WHERE id = ?').run(avatar, s.user.id);
     }
+    const { errors, value } = validateProfile(req.body || {});
+    if (Object.keys(errors).length) return res.status(400).json({ error: 'Please fix the highlighted fields.', fields: errors });
+    for (const [field, v] of Object.entries(value)) {
+      // Column names come from validateProfile's fixed set, never from the request.
+      db.prepare(`UPDATE users SET ${field} = ? WHERE id = ?`).run(v, s.user.id);
+    }
     res.json({ user: selfView(db.prepare('SELECT * FROM users WHERE id = ?').get(s.user.id)) });
   });
 
@@ -395,5 +453,5 @@ function socketAuth(socket, next) {
 
 module.exports = {
   createAuthRouter, socketAuth, sessionFromCookieHeader, jsonOnly, isAdmin, adminEmails,
-  displayName, validAvatar, validateRegistration, ageOn,
+  displayName, validAvatar, validateRegistration, ageOn, profileExtras,
 };

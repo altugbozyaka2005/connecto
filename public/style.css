@@ -284,6 +284,48 @@ p { margin: 0; }
 .radar::after { content: ''; position: absolute; inset: 38px; border-radius: 50%; background: var(--accent); }
 @keyframes radar { from { transform: scale(.3); opacity: .9; } to { transform: scale(1); opacity: 0; } }
 
+/* ---------- Profiles on cards ---------- */
+.match-name { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; }
+.pill-friend { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--good) 16%, var(--surface)); color: var(--good); }
+.pill-friend[hidden] { display: none; }
+.match-meta { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.match-meta:empty, .match-bio:empty, .mini-chips:empty { display: none; }
+.match-bio { font-size: 13px; color: var(--muted); font-style: italic; margin-top: 8px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+.mini-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; margin-top: 10px; }
+.mini-chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
+.mini-chip.shared { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--text); font-weight: 600; }
+
+/* ---------- Friends ---------- */
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
+.friends-btn { position: relative; padding: 8px 14px; }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 700; display: inline-grid; place-items: center; }
+.badge[hidden] { display: none; }
+.room-actions { display: flex; gap: 8px; align-items: center; }
+#add-friend-btn[hidden] { display: none; }
+.people-list { list-style: none; margin: 8px 0 12px; padding: 0; display: grid; gap: 8px; }
+.people-list:empty { display: none; }
+.people-list li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 14px; }
+.people-list .who { flex: 1; min-width: 0; }
+.people-list .who strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.people-list .who span { display: block; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.people-list .btn { padding: 8px 14px; font-size: 14px; }
+.people-list .icon-btn { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 6px; border-radius: 8px; font-size: 13px; }
+.people-list .icon-btn:hover { color: var(--danger); background: var(--surface-2); }
+.presence { position: relative; }
+.presence::after { content: ''; position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--surface); background: #a8a3b3; }
+.presence[data-status="online"]::after, .presence[data-status="searching"]::after { background: var(--good); }
+.presence[data-status="in-call"]::after { background: #f0a020; }
+#friend-requests-section .eyebrow { margin-top: 4px; }
+
+/* ---------- Tag input ---------- */
+.tag-input { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface-2); }
+.tag-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.tags { display: contents; }
+.tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px; border-radius: 999px; background: var(--accent-soft); font-size: 13px; font-weight: 600; }
+.tag button { border: 0; background: none; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 50%; }
+.tag button:hover { color: var(--text); }
+.tag-input input { flex: 1; min-width: 120px; border: 0 !important; background: transparent !important; box-shadow: none !important; padding: 6px !important; }
+
 /* ---------- Dialogs ---------- */
 .dialog {
   width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto;
@@ -408,6 +450,8 @@ a.menu-item[hidden] { display: none; }
   .tile-local { right: 18px; top: 18px; }
   .controls { bottom: 20px; }
   .ctrl-leave span { display: none; }
+  .friends-label { display: none; }
+  .room-topbar { flex-wrap: wrap; }
   .me-pill span { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 @media (prefers-reduced-motion: reduce) {
