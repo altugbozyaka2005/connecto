@@ -442,24 +442,28 @@
 
   state.people = [];
   state.groups = [];
+  state.away = [];
   state.filter = 'all';
 
   // Kept for callers that clear the list (e.g. after changing activity).
-  function renderMatches(people, groups = []) {
+  function renderMatches(people, groups = [], away = []) {
     state.people = people;
     state.groups = groups;
+    state.away = away;
     renderResults();
   }
 
   function renderResults() {
-    const { people, groups, filter } = state;
-    $('#n-all').textContent = people.length + groups.length || '';
-    $('#n-people').textContent = people.length || '';
+    const { people, groups, away, filter } = state;
+    // "People" includes away (background) searchers; they're ranked lower by the server.
+    const peopleAll = [...people, ...away];
+    $('#n-all').textContent = peopleAll.length + groups.length || '';
+    $('#n-people').textContent = peopleAll.length || '';
     $('#n-groups').textContent = groups.length || '';
     const items = [
-      ...(filter !== 'groups' ? people.map((m) => ({ kind: 'person', m })) : []),
+      ...(filter !== 'groups' ? peopleAll.map((m) => ({ kind: 'person', m })) : []),
       ...(filter !== 'people' ? groups.map((g) => ({ kind: 'group', m: g })) : []),
-    ].sort((a, b) => b.m.score - a.m.score);
+    ].sort((a, b) => (a.m.away === b.m.away ? 0 : a.m.away ? 1 : -1) || b.m.score - a.m.score);
     const grid = $('#match-grid');
     grid.textContent = '';
     for (const it of items) grid.append(it.kind === 'group' ? groupCard(it.m) : personCard(it.m));
@@ -521,7 +525,11 @@
     paintAvatar(card.querySelector('.avatar'), m.name, m.avatar);
     card.querySelector('.name-text').textContent = m.name;
     card.querySelector('.pill-friend').hidden = !m.friend;
-    card.querySelector('.match-meta').textContent = metaLine(m);
+    card.querySelector('.pill-away').hidden = !m.away;
+    if (m.away) card.classList.add('away');
+    card.querySelector('.match-meta').textContent = m.away
+      ? [`Searching in the background · ${ago(m.since)}`, metaLine(m)].filter(Boolean).join(' · ')
+      : metaLine(m);
     card.querySelector('.match-activity').textContent = m.activity;
     card.querySelector('.match-bio').textContent = m.bio || '';
     const chips = card.querySelector('.mini-chips');
@@ -537,7 +545,10 @@
     card.querySelector('.score-bar i').style.width = `${m.score}%`;
     card.querySelector('.score b').textContent = `${m.score}%`;
     const cta = card.querySelector('.match-cta');
-    if (m.requestedYou) {
+    if (m.away) {
+      if (m.requested) card.dataset.state = 'requested';
+      cta.textContent = m.requestedYou ? 'Asked to connect — accept' : m.requested ? 'Request sent ✓' : 'Send request · they’ll see it later';
+    } else if (m.requestedYou) {
       card.dataset.state = 'requested-you';
       cta.textContent = 'Wants to join you — accept';
     } else if (m.requested) {
@@ -548,7 +559,9 @@
     }
     const hit = card.querySelector('.match-hit');
     hit.setAttribute('aria-label', `${cta.textContent}: ${m.name}, ${m.activity}`);
-    hit.addEventListener('click', () => onMatchClick(m));
+    hit.addEventListener('click', () => (m.away ? requestAway(m) : onMatchClick(m)));
+    // Report/block menu needs a live person; away cards don't have one.
+    card.querySelector('.card-more').hidden = !!m.away;
     card.querySelector('.card-more').addEventListener('click', (e) => {
       e.stopPropagation();
       openCardMenu(e.currentTarget, m);
@@ -566,17 +579,35 @@
     else if (!res.matched) toast({ title: `Request sent to ${m.name}`, body: 'We’ll let you know when they respond.', timeout: 2500 });
   }
 
-  socket.on('matches', ({ matches, groups, online }) => {
+  socket.on('matches', ({ matches, groups, away, online }) => {
     $('#online-count').textContent = Math.max(0, online - 1);
-    if (!state.room) renderMatches(matches, groups || []);
+    if (!state.room) renderMatches(matches, groups || [], away || []);
   });
 
-  socket.on('incoming-request', ({ from, score, friend }) => {
+  function ago(ms) {
+    const min = Math.round((Date.now() - ms) / 60000);
+    if (min < 1) return 'just now';
+    if (min < 60) return `${min} min ago`;
+    const h = Math.round(min / 60);
+    return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+  }
+
+  async function requestAway(m) {
+    if (m.requested) return;
+    const res = await emit('connect-request', { accountId: m.accountId });
+    if (res.error) return toast({ title: 'Couldn’t send request', body: res.error });
+    toast(res.status === 'accepted'
+      ? { title: `You and ${m.name} both want to connect 🎉`, body: 'Find them under Requests and call when you’re both online.' }
+      : { title: `Request sent to ${m.name}`, body: 'They’ll see it when they’re back. We’ll let you know if they accept.', timeout: 4000 });
+  }
+
+  socket.on('incoming-request', ({ from, score, friend, connect }) => {
     if (state.room || state.incoming.has(from.id)) return;
     const details = [metaLine(from), from.bio].filter(Boolean).join(' · ');
     const el = toast({
-      title: friend ? `Your friend ${from.name} is inviting you to a call` : `${from.name} wants to join you`,
-      body: friend
+      title: friend ? `Your friend ${from.name} is inviting you to a call`
+        : connect ? `${from.name} is calling (you both wanted to connect)` : `${from.name} wants to join you`,
+      body: friend || connect
         ? [from.activity && `They're doing “${from.activity}”`, details].filter(Boolean).join(' · ')
         : [`“${from.activity}” · ${score}% match`, details].filter(Boolean).join(' · '),
       avatarOf: from,
@@ -791,9 +822,9 @@
 
   // ---- Join requests (host side) ----
   const joinToasts = new Map();
-  socket.on('join-request', ({ from, score }) => {
+  socket.on('join-request', ({ from, score, invitedBy }) => {
     const el = toast({
-      title: `${from.name} wants to join your call`,
+      title: invitedBy ? `${from.name} wants to join (invited by ${invitedBy})` : `${from.name} wants to join your call`,
       body: [`“${from.activity}” · ${score}% match`, metaLine(from), from.bio].filter(Boolean).join(' · '),
       avatarOf: from,
       timeout: 60000,
@@ -1188,17 +1219,23 @@
       line.textContent = f.status === 'searching' ? `Doing “${f.activity}”` : [STATUS_TEXT[f.status], metaLine(f)].filter(Boolean).join(' · ');
       who.append(line);
       if (f.status === 'online' || f.status === 'searching') {
-        const invite = button('Invite to call', 'btn btn-primary', async () => {
+        const inCall = !!state.room;
+        const invite = button(inCall ? 'Invite to this call' : 'Invite to call', 'btn btn-primary', async () => {
           invite.disabled = true;
           const res = await emit('friend-invite', { id: f.id });
           if (res.error) { invite.disabled = false; return toast({ title: 'Couldn’t invite', body: res.error }); }
           if (!res.matched) {
             invite.textContent = 'Invited ✓';
-            toast({ title: `Invite sent to ${f.name}`, body: 'You’ll join a call as soon as they accept.', timeout: 3000 });
+            toast({
+              title: `Invite sent to ${f.name}`,
+              body: inCall
+                ? (res.needsApproval ? 'If they accept, the host will be asked to let them in.' : 'They’ll join as soon as they accept.')
+                : 'You’ll join a call as soon as they accept.',
+              timeout: 3500,
+            });
           }
           $('#friends-dialog').close();
         });
-        invite.disabled = !!state.room;
         li.append(invite);
       }
       li.append(button('✕', 'icon-btn', () => {
@@ -1305,6 +1342,205 @@
       socket.emit('refresh-profile');
       $('#profile-dialog').close();
       toast({ title: 'Profile saved', timeout: 2500 });
+    });
+  });
+
+  // ---------- Invites into someone's call ----------
+
+  const roomInviteToasts = new Map();
+  socket.on('room-invite', ({ roomId, from, activity, count, capacity, members, needsApproval }) => {
+    if (state.room) return;
+    dismiss(roomInviteToasts.get(roomId));
+    const who = members.length > 1 ? `with ${members.join(', ')}` : `with ${from.name}`;
+    const el = toast({
+      title: `${from.name} invites you to join their call`,
+      body: [`“${activity}”`, `${count}/${capacity} people ${who}`, needsApproval && 'the host will let you in'].filter(Boolean).join(' · '),
+      avatarOf: from,
+      timeout: 60000,
+      actions: [
+        { label: 'Not now', onClick: () => { dismiss(el); emit('room-invite-respond', { roomId, accept: false }); } },
+        { label: 'Join', cls: 'btn-good', onClick: async () => {
+          dismiss(el);
+          const res = await emit('room-invite-respond', { roomId, accept: true });
+          if (res.error) toast({ title: 'Couldn’t join', body: res.error });
+          else if (res.pending) toast({ title: 'Waiting for the host', body: 'You’ll be let in as soon as they say yes.', timeout: 4000 });
+        } },
+      ],
+    });
+    roomInviteToasts.set(roomId, el);
+  });
+  socket.on('room-invite-expired', ({ roomId }) => { dismiss(roomInviteToasts.get(roomId)); roomInviteToasts.delete(roomId); });
+  socket.on('room-invite-declined', ({ name }) => toast({ title: `${name} can’t join right now`, timeout: 3000 }));
+
+  // ---------- Background search & requests inbox ----------
+
+  state.inbox = { background: null, incoming: [], outgoing: [], ready: [], matches: [], notifyEmail: true };
+  let shownAwaySummary = false;
+
+  function untilText(ms) {
+    const d = new Date(ms);
+    const sameDay = d.toDateString() === new Date().toDateString();
+    return sameDay ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function renderBgControls() {
+    const bg = state.inbox.background;
+    const btn = $('#bg-btn');
+    btn.toggleAttribute('data-on', !!bg);
+    $('#bg-btn-label').textContent = bg ? `Background search on · until ${untilText(bg.expiresAt)}` : 'Search in background';
+    $('#bg-empty-btn').hidden = !!bg;
+    $('#bg-empty-hint').hidden = !!bg;
+  }
+
+  function openBgDialog() {
+    const bg = state.inbox.background;
+    $('#bg-activity').textContent = bg?.activity || state.activity;
+    $('#bg-notify').checked = state.inbox.notifyEmail;
+    $('#bg-on').hidden = !bg;
+    if (bg) $('#bg-on').textContent = bg.activity === state.activity
+      ? `On until ${untilText(bg.expiresAt)}. Starting again extends it.`
+      : `Currently on for “${bg.activity}”. Starting again switches it to “${state.activity}”.`;
+    $('#bg-stop').hidden = !bg;
+    $('#bg-go').textContent = bg ? 'Update' : 'Start';
+    openDialog('#bg-dialog');
+  }
+  $('#bg-btn').addEventListener('click', openBgDialog);
+  $('#bg-empty-btn').addEventListener('click', openBgDialog);
+
+  $('#bg-go').addEventListener('click', async () => {
+    const res = await emit('bg-start', { hours: Number($('#bg-hours').value), notify: $('#bg-notify').checked });
+    if (res.error) { $('#bg-dialog .form-error').textContent = res.error; return; }
+    $('#bg-dialog').close();
+    toast({ title: 'Background search on', body: `We’ll keep looking until ${untilText(res.expiresAt)}, even after you close Connecto.` });
+  });
+  $('#bg-stop').addEventListener('click', async () => {
+    await emit('bg-stop');
+    $('#bg-dialog').close();
+    toast({ title: 'Background search stopped', timeout: 2500 });
+  });
+  $('#bg-notify').addEventListener('change', (e) => { if (state.inbox.background) emit('notify-email', { on: e.target.checked }); });
+
+  function statusLine(p) {
+    return { searching: 'Online now', online: 'Online now', 'in-call': 'In a call', offline: 'Offline' }[p.status] || '';
+  }
+
+  function renderInbox() {
+    const { background: bg, incoming, outgoing, ready, matches } = state.inbox;
+    const urgent = incoming.length + ready.filter((r) => r.available).length;
+    document.querySelectorAll('.inbox-badge').forEach((b) => { b.textContent = urgent; b.hidden = !urgent; });
+    renderBgControls();
+
+    $('#inbox-bg-line').textContent = bg
+      ? `Searching in the background for “${bg.activity}” until ${untilText(bg.expiresAt)}.`
+      : 'Background search is off.';
+
+    const fill = (listId, sectionId, items, build) => {
+      const list = $(listId);
+      list.textContent = '';
+      $(sectionId).hidden = !items.length;
+      for (const it of items) list.append(build(it));
+    };
+    const row = (p, line) => {
+      const { li, who } = personRow({ ...p, status: p.status }, 'presence');
+      const span = document.createElement('span');
+      span.textContent = line;
+      who.append(span);
+      return li;
+    };
+
+    fill('#inbox-ready', '#inbox-ready-section', ready, (r) => {
+      const li = row(r.person, `You both want to connect · ${statusLine(r.person)}`);
+      const call = button(r.available ? 'Call now' : 'Not online', 'btn btn-primary', async () => {
+        const res = await emit('connect-call', { accountId: r.person.id });
+        if (res.error) return toast({ title: 'Couldn’t call', body: res.error });
+        $('#inbox-dialog').close();
+        if (!res.matched) toast({ title: `Calling ${r.person.name}…`, body: 'You’ll join as soon as they pick up.', timeout: 3500 });
+      });
+      call.disabled = !r.available || !!state.room;
+      li.append(call);
+      return li;
+    });
+    fill('#inbox-incoming', '#inbox-incoming-section', incoming, (r) => {
+      const li = row(r.person, `“${r.activity}” · ${ago(r.at)}`);
+      li.append(
+        button('Decline', 'btn btn-ghost', () => emit('connect-respond', { id: r.id, accept: false })),
+        button('Accept', 'btn btn-good', async () => {
+          const res = await emit('connect-respond', { id: r.id, accept: true });
+          if (res.error) toast({ title: 'Couldn’t accept', body: res.error });
+          else toast({ title: `You and ${r.person.name} both want to connect 🎉`, body: r.person.status === 'offline' ? 'We’ll let them know. Call when you’re both online.' : 'They’re online now. Tap Call now.' });
+        }),
+      );
+      return li;
+    });
+    fill('#inbox-matches', '#inbox-matches-section', matches, (m) => {
+      const li = row(m.person, `“${m.activity}” · ${m.score}% match`);
+      li.append(button('Send request', 'btn btn-primary', async (e) => {
+        e.currentTarget.disabled = true;
+        const res = await emit('connect-request', { accountId: m.person.id });
+        if (res.error) toast({ title: 'Couldn’t send request', body: res.error });
+      }));
+      return li;
+    });
+    fill('#inbox-outgoing', '#inbox-outgoing-section', outgoing, (r) => {
+      const li = row(r.person, `Sent ${ago(r.at)} · ${statusLine(r.person)}`);
+      li.append(button('Cancel', 'btn btn-ghost', () => emit('connect-cancel', { id: r.id })));
+      return li;
+    });
+    $('#inbox-empty').hidden = !!(ready.length || incoming.length || matches.length || outgoing.length);
+  }
+
+  socket.on('inbox', (payload) => {
+    state.inbox = payload;
+    renderInbox();
+    // First load after coming back: tell them what happened while they were away.
+    if (!shownAwaySummary) {
+      shownAwaySummary = true;
+      const n = payload.incoming.length;
+      const r = payload.ready.length;
+      if (n || r) {
+        const el = toast({
+          title: 'While you were away',
+          body: [n && `${n} ${n === 1 ? 'person wants' : 'people want'} to connect`, r && `${r} accepted your request`].filter(Boolean).join(' · '),
+          timeout: 12000,
+          actions: [{ label: 'View', cls: 'btn-primary', onClick: () => { dismiss(el); renderInbox(); openDialog('#inbox-dialog'); } }],
+        });
+      }
+    }
+  });
+  socket.on('disconnect', () => { shownAwaySummary = false; });
+
+  document.querySelectorAll('.inbox-btn').forEach((b) => b.addEventListener('click', () => {
+    renderInbox();
+    openDialog('#inbox-dialog');
+  }));
+
+  socket.on('connect-request', ({ id, from, activity }) => {
+    const el = toast({
+      title: `${from.name} wants to connect`,
+      body: [`“${activity}”`, metaLine(from)].filter(Boolean).join(' · '),
+      avatarOf: from,
+      timeout: 20000,
+      actions: [
+        { label: 'Later', onClick: () => dismiss(el) },
+        { label: 'Accept', cls: 'btn-good', onClick: async () => {
+          dismiss(el);
+          const res = await emit('connect-respond', { id, accept: true });
+          if (!res.error) toast({ title: `You and ${from.name} both want to connect 🎉`, body: 'Tap Call now under Requests.' });
+        } },
+      ],
+    });
+  });
+
+  socket.on('connect-accepted', ({ accountId, name }) => {
+    const el = toast({
+      title: `${name} accepted your request 🎉`,
+      body: 'You both want to connect. Call them now?',
+      timeout: 20000,
+      actions: [{ label: 'Call now', cls: 'btn-good', onClick: async () => {
+        dismiss(el);
+        const res = await emit('connect-call', { accountId });
+        if (res.error) toast({ title: 'Couldn’t call', body: res.error });
+      } }],
     });
   });
 

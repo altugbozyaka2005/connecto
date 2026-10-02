@@ -344,6 +344,24 @@ p { margin: 0; }
 .presence[data-status="in-call"]::after { background: #f0a020; }
 #friend-requests-section .eyebrow { margin-top: 4px; }
 
+/* ---------- Background search & inbox ---------- */
+.status-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.bg-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+#bg-btn[data-on] { border-color: var(--good); }
+#bg-btn[data-on] .bg-dot { background: var(--good); box-shadow: 0 0 0 0 var(--good); animation: ping 1.8s infinite; }
+#bg-empty-btn { margin-top: 20px; }
+#bg-empty-hint { margin-top: 10px; }
+#bg-empty-btn[hidden], #bg-empty-hint[hidden] { display: none; }
+.pill-away { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px dashed var(--muted); color: var(--muted); }
+.pill-away[hidden] { display: none; }
+.match-card.away { border-style: dashed; background: var(--surface); }
+.match-card.away .avatar { filter: saturate(.7); opacity: .9; }
+.inbox-btn { position: relative; padding: 8px 12px; }
+.inbox-btn .badge { position: absolute; top: -4px; right: -4px; }
+.inbox-section { margin-bottom: 8px; }
+#bg-stop { margin-right: auto; color: var(--danger); }
+#bg-stop[hidden] { display: none; }
+
 /* ---------- Tag input ---------- */
 .tag-input { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface-2); }
 .tag-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }

@@ -85,6 +85,28 @@ db.exec(`
     PRIMARY KEY (from_id, to_id)
   );
   CREATE INDEX IF NOT EXISTS friend_requests_to ON friend_requests(to_id);
+
+  -- A search that keeps running after you close the tab (one per person).
+  CREATE TABLE IF NOT EXISTS background_searches (
+    user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    activity   TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+
+  -- "I'd like to connect" sent to someone who isn't online right now.
+  -- pending -> accepted (both want it; call when both are online) | declined.
+  CREATE TABLE IF NOT EXISTS connect_requests (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    to_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    activity   TEXT NOT NULL,       -- what the sender was doing when they asked
+    status     TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS connect_requests_to ON connect_requests(to_id, status);
+  CREATE INDEX IF NOT EXISTS connect_requests_from ON connect_requests(from_id, status);
 `);
 
 // Migrations for databases created before a column existed.
@@ -97,5 +119,8 @@ if (!columns.has('bio')) db.exec('ALTER TABLE users ADD COLUMN bio TEXT');
 if (!columns.has('interests')) db.exec('ALTER TABLE users ADD COLUMN interests TEXT'); // JSON array of strings
 if (!columns.has('city')) db.exec('ALTER TABLE users ADD COLUMN city TEXT');
 if (!columns.has('timezone')) db.exec('ALTER TABLE users ADD COLUMN timezone TEXT'); // IANA name, e.g. Europe/Istanbul
+// Email notifications for background search (on by default, throttled).
+if (!columns.has('notify_email')) db.exec('ALTER TABLE users ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 1');
+if (!columns.has('notified_at')) db.exec('ALTER TABLE users ADD COLUMN notified_at INTEGER');
 
 module.exports = db;

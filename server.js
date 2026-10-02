@@ -9,6 +9,7 @@ const { createAuthRouter, socketAuth, displayName, profileExtras } = require('./
 const { iceServersFor } = require('./turn');
 const safety = require('./safety');
 const friends = require('./friends');
+const background = require('./background');
 
 const PORT = process.env.PORT || 3000;
 const MAX_MATCHES = 12;
@@ -24,6 +25,13 @@ const MAX_ROOM_SIZE = 5;
 const MAX_GROUP_MATCHES = 8;
 const JOIN_REQUEST_TTL_MS = 60 * 1000;
 const MAX_PENDING_JOINS = 3;
+const ROOM_INVITE_TTL_MS = 60 * 1000;
+// Background searchers can't answer right away, so they rank a bit lower than live people.
+const AWAY_PENALTY = 0.85;
+const MAX_AWAY_MATCHES = 6;
+// Two background searches must be this similar before we tell them about each other.
+const BG_MATCH_SCORE = 0.35;
+const BG_NOTIFY_SCORE = 0.45;
 
 const app = express();
 // Set TRUST_PROXY=1 when running behind a load balancer so rate limits see real client IPs.
@@ -119,6 +127,45 @@ function matchesFor(user) {
   return results.slice(0, MAX_MATCHES);
 }
 
+// Accounts that are online and busy (searching live or in a call) aren't shown as "away".
+function liveAccounts() {
+  const out = new Set();
+  for (const u of users.values()) if (u.status !== 'idle') out.add(u.accountId);
+  return out;
+}
+
+// People with a background search who aren't here right now.
+function awayFor(user, live, rowCache) {
+  const results = [];
+  for (const bg of background.active()) {
+    if (bg.accountId === user.accountId || live.has(bg.accountId)) continue;
+    if (safety.isBlocked(user.accountId, bg.accountId)) continue;
+    const s = score(user.profile, bg.profile) * AWAY_PENALTY;
+    if (s < MIN_SCORE) continue;
+    const row = cachedRow(rowCache, bg.accountId);
+    if (!row || row.banned_at) continue;
+    const req = background.between(user.accountId, bg.accountId);
+    results.push({
+      accountId: bg.accountId,
+      name: displayName(row), avatar: row.avatar, ...profileExtras(row),
+      activity: bg.activity,
+      since: bg.createdAt,
+      away: true,
+      score: Math.round(s * 100),
+      friend: friends.areFriends(user.accountId, bg.accountId),
+      requested: req?.from_id === user.accountId,
+      requestedYou: req?.to_id === user.accountId && req.status === 'pending',
+    });
+  }
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, MAX_AWAY_MATCHES);
+}
+
+function cachedRow(cache, id) {
+  if (!cache.has(id)) cache.set(id, db.prepare('SELECT * FROM users WHERE id = ?').get(id));
+  return cache.get(id);
+}
+
 // Open group rooms with a free seat, ranked by how close their activity is to yours.
 function groupsFor(user) {
   const results = [];
@@ -154,11 +201,14 @@ function scheduleRecompute() {
     recomputeTimer = null;
     let searching = 0;
     for (const u of users.values()) if (u.status === 'searching') searching++;
+    const live = liveAccounts();
+    const rowCache = new Map();
     for (const u of users.values()) {
       if (u.status !== 'searching') continue;
-      io.to(u.id).emit('matches', { matches: matchesFor(u), groups: groupsFor(u), online: searching });
+      io.to(u.id).emit('matches', { matches: matchesFor(u), groups: groupsFor(u), away: awayFor(u, live, rowCache), online: searching });
     }
     pushFriendLists();
+    pushInboxes(rowCache);
   }, 120);
 }
 
@@ -214,6 +264,72 @@ function pushFriendLists() {
     }
   }
 }
+
+// ---------- Inbox (background search + requests made while someone was away) ----------
+
+function personSummary(row, presence) {
+  const p = presence.get(row.id);
+  return {
+    id: row.id, name: displayName(row), avatar: row.avatar, ...profileExtras(row),
+    status: p ? STATUS_LABEL[p.status] : 'offline',
+  };
+}
+
+function inboxFor(accountId, presence, rowCache) {
+  const mine = background.get(accountId);
+  const me = cachedRow(rowCache, accountId);
+  const incoming = [];
+  const outgoing = [];
+  const ready = [];
+  const involved = new Set();
+  for (const r of background.forAccount(accountId)) {
+    const otherId = r.from_id === accountId ? r.to_id : r.from_id;
+    const other = cachedRow(rowCache, otherId);
+    if (!other || other.banned_at || safety.isBlocked(accountId, otherId)) continue;
+    involved.add(otherId);
+    const item = { id: r.id, person: personSummary(other, presence), activity: r.activity, at: r.updated_at };
+    if (r.status === 'accepted') ready.push({ ...item, available: !!reachableSocket(otherId) });
+    else if (r.to_id === accountId) incoming.push(item);
+    else outgoing.push(item);
+  }
+  // Other background searches like mine that I haven't talked to yet.
+  const matches = [];
+  if (mine) {
+    for (const bg of background.active()) {
+      if (bg.accountId === accountId || involved.has(bg.accountId) || safety.isBlocked(accountId, bg.accountId)) continue;
+      const s = score(mine.profile, bg.profile);
+      if (s < BG_MATCH_SCORE) continue;
+      const row = cachedRow(rowCache, bg.accountId);
+      if (!row || row.banned_at) continue;
+      matches.push({ person: personSummary(row, presence), activity: bg.activity, since: bg.createdAt, score: Math.round(s * 100) });
+    }
+    matches.sort((a, b) => b.score - a.score);
+  }
+  return {
+    background: mine ? { activity: mine.activity, expiresAt: mine.expiresAt } : null,
+    notifyEmail: !!me?.notify_email,
+    incoming, outgoing, ready, matches: matches.slice(0, 10),
+  };
+}
+
+function pushInboxes(rowCache = new Map()) {
+  const presence = presenceByAccount();
+  const perAccount = new Map();
+  for (const u of users.values()) {
+    if (!perAccount.has(u.accountId)) perAccount.set(u.accountId, inboxFor(u.accountId, presence, rowCache));
+    const payload = perAccount.get(u.accountId);
+    const sig = JSON.stringify(payload);
+    if (sig !== u.inboxSig) {
+      u.inboxSig = sig;
+      io.to(u.id).emit('inbox', payload);
+    }
+  }
+}
+
+const isOnline = (accountId) => [...users.values()].some((u) => u.accountId === accountId);
+
+// Friends, or two people who both said yes to connecting: they can call each other directly.
+const trusted = (a, b) => friends.areFriends(a, b) || background.connected(a, b);
 
 // A tab that can take a friend's call invite right now (connected, not in a call).
 function reachableSocket(accountId) {
@@ -289,6 +405,7 @@ function newRoom({ capacity = 2, open = false, hostId = null, activity = '' } = 
     chat: [],
     removed: new Set(),
     joinRequests: new Map(),
+    invited: new Set(), // join requests that came from a member's invite (allowed while closed)
     ready: new Set(),
     links: new Set(),
     createdAt: Date.now(),
@@ -321,6 +438,7 @@ function openRoom(requester, accepter) {
   for (const [u, peer] of [[accepter, requester], [requester, accepter]]) {
     u.lastPeer = { accountId: peer.accountId, name: peer.name, activity: peer.activity, chat: room.chat, at: Date.now() };
   }
+  background.settle(requester.accountId, accepter.accountId);
   // Both are in the room before either is told, so each sees the other straight away.
   attach(room, accepter);
   attach(room, requester);
@@ -385,9 +503,20 @@ function declineJoin(room, requesterId, reason) {
   if (timer === undefined) return;
   clearTimeout(timer);
   room.joinRequests.delete(requesterId);
+  room.invited.delete(requesterId);
   const r = users.get(requesterId);
   r?.joinRequests.delete(room.id);
   io.to(requesterId).emit('join-declined', { roomId: room.id, activity: room.activity, reason });
+}
+
+// Queue `u` for the host's approval. `invitedBy` is set when a member invited a friend.
+function addJoinRequest(room, u, invitedBy = null) {
+  if (invitedBy) room.invited.add(u.id);
+  room.joinRequests.set(u.id, setTimeout(() => { declineJoin(room, u.id, 'timeout'); broadcastRoom(room); }, JOIN_REQUEST_TTL_MS));
+  u.joinRequests.add(room.id);
+  const host = users.get(room.hostId);
+  if (host) io.to(host.id).emit('join-request', { from: publicUser(u), score: Math.round(score(host.profile, u.profile) * 100), invitedBy });
+  broadcastRoom(room);
 }
 
 // Withdraw all of this user's pending join requests (they joined something else or left).
@@ -403,10 +532,13 @@ function cancelJoinRequests(u) {
   u.joinRequests.clear();
 }
 
-// Seats filled or the room was closed: nobody else can get in.
+// Seats filled: nobody else can get in. Room closed: only invited friends can still get in.
 function settleRequests(room) {
-  const reason = !room.open ? 'closed' : room.members.length >= room.capacity ? 'full' : null;
-  if (reason) for (const id of [...room.joinRequests.keys()]) declineJoin(room, id, reason);
+  const full = room.members.length >= room.capacity;
+  for (const id of [...room.joinRequests.keys()]) {
+    if (full) declineJoin(room, id, 'full');
+    else if (!room.open && !room.invited.has(id)) declineJoin(room, id, 'closed');
+  }
 }
 
 // ---------- Blocking ----------
@@ -432,6 +564,7 @@ function resolveTarget(u, { target, lastPeer } = {}) {
 function applyBlock(blockerAccountId, blockedAccountId) {
   safety.block(blockerAccountId, blockedAccountId);
   friends.remove(blockerAccountId, blockedAccountId);
+  background.settle(blockerAccountId, blockedAccountId);
   const mine = [...users.values()].filter((x) => x.accountId === blockerAccountId);
   const theirs = [...users.values()].filter((x) => x.accountId === blockedAccountId);
   for (const x of mine) {
@@ -483,6 +616,7 @@ io.on('connection', (socket) => {
     outgoing: new Set(),
     incoming: new Set(),
     joinRequests: new Set(),
+    roomInvites: new Map(), // roomId -> { fromId, fromName, byHost, timer }
     joinedAt: Date.now(),
   };
   applyProfile(entry, account);
@@ -564,8 +698,8 @@ io.on('connection', (socket) => {
     u.incoming.delete(from);
     f?.outgoing.delete(u.id);
     // Friends can invite each other from the activity screen too, so "idle" counts as available.
-    const isFriend = f && friends.areFriends(u.accountId, f.accountId);
-    const available = (x) => x.status === 'searching' || (isFriend && x.status === 'idle');
+    const isTrusted = f && trusted(u.accountId, f.accountId);
+    const available = (x) => x.status === 'searching' || (isTrusted && x.status === 'idle');
     if (!f || !available(f) || safety.isBlocked(u.accountId, f.accountId)) {
       scheduleRecompute();
       return ack?.({ error: 'That person is no longer available.' });
@@ -666,9 +800,9 @@ io.on('connection', (socket) => {
     const u = me();
     const friendId = Number(id);
     if (!u || !friends.areFriends(u.accountId, friendId)) return ack?.({ error: 'You can only invite friends.' });
-    if (u.status === 'in-room') return ack?.({ error: 'Leave your current call first.' });
     const t = reachableSocket(friendId);
     if (!t) return ack?.({ error: 'Your friend isn’t available right now.' });
+    if (u.status === 'in-room') return inviteIntoRoom(u, t, ack);
     if (u.incoming.has(t.id)) {
       openRoom(t, u);
       return ack?.({ ok: true, matched: true });
@@ -676,6 +810,168 @@ io.on('connection', (socket) => {
     u.outgoing.add(t.id);
     t.incoming.add(u.id);
     io.to(t.id).emit('incoming-request', { from: publicUser(u), friend: true });
+    ack?.({ ok: true });
+    scheduleRecompute();
+  });
+
+  // In a call, "Invite" brings a friend into this call. The host's (or, in a 1:1 nobody has
+  // opened, either person's) invite lets them straight in; anyone else's needs the host's OK.
+  function inviteIntoRoom(u, t, ack) {
+    const room = rooms.get(u.roomId);
+    if (!room) return ack?.({ error: 'You’re not in a call.' });
+    const members = room.members.map((id) => users.get(id)).filter(Boolean);
+    if (room.removed.has(t.accountId) || members.some((m) => m.accountId === t.accountId || safety.isBlocked(t.accountId, m.accountId))) {
+      return ack?.({ error: 'They can’t join this call.' });
+    }
+    if (room.members.length >= MAX_ROOM_SIZE) return ack?.({ error: `Calls can have up to ${MAX_ROOM_SIZE} people.` });
+    const byHost = !room.hostId || room.hostId === u.id;
+    const old = t.roomInvites.get(room.id);
+    if (old) clearTimeout(old.timer);
+    const timer = setTimeout(() => {
+      if (t.roomInvites.get(room.id)?.timer === timer) t.roomInvites.delete(room.id);
+      io.to(t.id).emit('room-invite-expired', { roomId: room.id });
+    }, ROOM_INVITE_TTL_MS);
+    t.roomInvites.set(room.id, { fromId: u.id, fromName: u.name, byHost, timer });
+    io.to(t.id).emit('room-invite', {
+      roomId: room.id,
+      from: publicUser(u),
+      activity: room.activity || u.activity,
+      count: room.members.length,
+      capacity: room.capacity,
+      members: members.map((m) => m.name),
+      needsApproval: !byHost,
+    });
+    ack?.({ ok: true, needsApproval: !byHost });
+  }
+
+  socket.on('room-invite-respond', ({ roomId, accept } = {}, ack) => {
+    const u = me();
+    const inv = u?.roomInvites.get(roomId);
+    if (!inv) return ack?.({ error: 'That invite has expired.' });
+    clearTimeout(inv.timer);
+    u.roomInvites.delete(roomId);
+    const room = rooms.get(roomId);
+    const inviter = users.get(inv.fromId);
+    if (!accept) {
+      if (inviter) io.to(inviter.id).emit('room-invite-declined', { name: u.name });
+      return ack?.({ ok: true });
+    }
+    if (!room || u.status === 'in-room') return ack?.({ error: 'That call has ended.' });
+    const members = room.members.map((id) => users.get(id)).filter(Boolean);
+    if (room.removed.has(u.accountId) || members.some((m) => safety.isBlocked(u.accountId, m.accountId))) {
+      return ack?.({ error: 'You can’t join this call.' });
+    }
+    const hostStillInviter = inviter && inviter.roomId === room.id && (!room.hostId || room.hostId === inviter.id);
+    if (inv.byHost && hostStillInviter) {
+      if (room.members.length >= room.capacity) {
+        if (room.capacity >= MAX_ROOM_SIZE) return ack?.({ error: 'That call is full.' });
+        room.capacity += 1; // the host's own invite makes space
+      }
+      if (!room.hostId) room.hostId = inviter.id;
+      addMember(room, u);
+      for (const id of room.members) io.to(id).emit('room-notice', { text: `${u.name} joined (invited by ${inviter.name}).` });
+      settleRequests(room);
+      broadcastRoom(room);
+      return ack?.({ ok: true, joined: true });
+    }
+    // Invited by a member: the host decides.
+    if (!room.hostId) return ack?.({ error: 'That call has ended.' });
+    if (u.status !== 'searching' && u.status !== 'idle') return ack?.({ error: 'You’re not available.' });
+    addJoinRequest(room, u, inv.fromName);
+    ack?.({ ok: true, pending: true });
+  });
+
+  // ---- Background search ----
+
+  socket.on('bg-start', ({ hours, notify } = {}, ack) => {
+    const u = me();
+    if (!u || !u.activity) return ack?.({ error: 'Tell us what you’re doing first.' });
+    const h = Number(hours);
+    if (!background.DURATIONS_H.includes(h)) return ack?.({ error: 'Choose how long to keep searching.' });
+    const mine = background.start(u.accountId, u.activity, h);
+    background.setNotify(u.accountId, notify !== false);
+    // Tell people with a very similar background search who aren't here right now.
+    for (const bg of background.active()) {
+      if (bg.accountId === u.accountId || isOnline(bg.accountId) || safety.isBlocked(u.accountId, bg.accountId)) continue;
+      if (score(mine.profile, bg.profile) >= BG_NOTIFY_SCORE) background.notify(bg.accountId, 'match', { name: u.name, activity: u.activity });
+    }
+    scheduleRecompute();
+    ack?.({ ok: true, expiresAt: mine.expiresAt });
+  });
+
+  socket.on('bg-stop', (_p, ack) => {
+    const u = me();
+    if (!u) return;
+    background.stop(u.accountId);
+    scheduleRecompute();
+    ack?.({ ok: true });
+  });
+
+  socket.on('notify-email', ({ on } = {}, ack) => {
+    const u = me();
+    if (!u) return;
+    background.setNotify(u.accountId, !!on);
+    scheduleRecompute();
+    ack?.({ ok: true });
+  });
+
+  // Ask someone with a background search to connect. They see it when they're back.
+  socket.on('connect-request', ({ accountId } = {}, ack) => {
+    const u = me();
+    const targetId = Number(accountId);
+    if (!u) return;
+    if (!background.get(targetId) && !background.between(u.accountId, targetId)) return ack?.({ error: 'They’re not searching anymore.' });
+    if (safety.isBlocked(u.accountId, targetId)) return ack?.({ error: 'They’re not searching anymore.' });
+    const result = background.request(u.accountId, targetId, u.activity || background.get(u.accountId)?.activity);
+    if (result.error) return ack?.({ error: result.error });
+    if (result.status === 'accepted') {
+      // They had asked us first: both want it now.
+      if (isOnline(targetId)) io.to(`account:${targetId}`).emit('connect-accepted', { accountId: u.accountId, name: u.name });
+      else background.notify(targetId, 'accepted', { name: u.name });
+    } else if (isOnline(targetId)) {
+      io.to(`account:${targetId}`).emit('connect-request', { id: result.request.id, from: publicUser(u), activity: result.request.activity });
+    } else {
+      background.notify(targetId, 'request', { name: u.name, activity: result.request.activity });
+    }
+    scheduleRecompute();
+    ack?.({ ok: true, status: result.status });
+  });
+
+  socket.on('connect-respond', ({ id, accept } = {}, ack) => {
+    const u = me();
+    if (!u) return;
+    const r = background.respond(Number(id), u.accountId, !!accept);
+    if (!r) return ack?.({ error: 'That request is no longer open.' });
+    if (accept) {
+      if (isOnline(r.from_id)) io.to(`account:${r.from_id}`).emit('connect-accepted', { accountId: u.accountId, name: u.name });
+      else background.notify(r.from_id, 'accepted', { name: u.name });
+    }
+    scheduleRecompute();
+    ack?.({ ok: true });
+  });
+
+  socket.on('connect-cancel', ({ id } = {}) => {
+    const u = me();
+    if (!u) return;
+    background.cancel(Number(id), u.accountId);
+    scheduleRecompute();
+  });
+
+  // Both said yes: ring them now (works from any screen, like a friend's call).
+  socket.on('connect-call', ({ accountId } = {}, ack) => {
+    const u = me();
+    const targetId = Number(accountId);
+    if (!u || !background.connected(u.accountId, targetId)) return ack?.({ error: 'You can only call people who accepted.' });
+    if (u.status === 'in-room') return ack?.({ error: 'Leave your current call first.' });
+    const t = reachableSocket(targetId);
+    if (!t) return ack?.({ error: 'They’re not online right now. You’ll see a Call button when they are.' });
+    if (u.incoming.has(t.id)) {
+      openRoom(t, u);
+      return ack?.({ ok: true, matched: true });
+    }
+    u.outgoing.add(t.id);
+    t.incoming.add(u.id);
+    io.to(t.id).emit('incoming-request', { from: publicUser(u), connect: true });
     ack?.({ ok: true });
     scheduleRecompute();
   });
@@ -758,11 +1054,7 @@ io.on('connection', (socket) => {
     }
     if (room.joinRequests.has(u.id)) return ack?.({ ok: true });
     if (u.joinRequests.size >= MAX_PENDING_JOINS) return ack?.({ error: 'Wait for your other requests to be answered first.' });
-    room.joinRequests.set(u.id, setTimeout(() => { declineJoin(room, u.id, 'timeout'); broadcastRoom(room); }, JOIN_REQUEST_TTL_MS));
-    u.joinRequests.add(room.id);
-    const host = users.get(room.hostId);
-    if (host) io.to(host.id).emit('join-request', { from: publicUser(u), score: Math.round(score(host.profile, u.profile) * 100) });
-    broadcastRoom(room);
+    addJoinRequest(room, u);
     ack?.({ ok: true });
   });
 
@@ -796,6 +1088,7 @@ io.on('connection', (socket) => {
     }
     clearTimeout(room.joinRequests.get(from));
     room.joinRequests.delete(from);
+    room.invited.delete(from);
     r.joinRequests.delete(room.id);
     addMember(room, r);
     for (const id of room.members) io.to(id).emit('room-notice', { text: `${r.name} joined.` });
@@ -829,6 +1122,7 @@ io.on('connection', (socket) => {
     if (room) removeMember(room, u, 'disconnected');
     cancelJoinRequests(u);
     for (const r of rooms.values()) if (r.joinRequests.has(u.id)) declineJoin(r, u.id, 'closed');
+    for (const inv of u.roomInvites.values()) clearTimeout(inv.timer);
     clearRequests(u);
     users.delete(socket.id);
     scheduleRecompute();

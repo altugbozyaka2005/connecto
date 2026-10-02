@@ -88,4 +88,25 @@ function sendAdminReportEmail(to, { reportedName, reportedEmail, reason, details
   });
 }
 
-module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendAdminReportEmail, outbox, mode };
+// Background search: someone wants to connect / accepted / is looking for the same thing.
+function sendConnectNotice(user, { kind, name, activity }) {
+  const appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  const copy = {
+    request: [`${name} wants to connect`, `${name} would like to do “${activity}” with you. Open Connecto to accept or decline.`],
+    accepted: [`${name} accepted your request`, `${name} wants to connect too. Open Connecto and call them when you’re both online.`],
+    match: ['Someone is looking for the same thing', `${name} is also looking for “${activity}”. Open Connecto to send them a request.`],
+  }[kind];
+  return send({
+    to: user.email,
+    subject: copy[0],
+    ...layout({
+      heading: copy[0],
+      intro: `Hi ${user.first_name}! ${copy[1]}`,
+      buttonText: 'Open Connecto',
+      url: appUrl,
+      outro: 'You get these because you started a background search. We send at most one every few hours. Turn them off under “Search in the background” in Connecto.',
+    }),
+  });
+}
+
+module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendAdminReportEmail, sendConnectNotice, outbox, mode };
