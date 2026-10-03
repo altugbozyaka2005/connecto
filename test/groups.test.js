@@ -155,3 +155,15 @@ test('blocking someone in a group removes them; a closed 2-person group ends whe
   a.sock.emit('leave-room');
   assert.strictEqual((await ended).reason, 'left');
 });
+
+test('a group room can be worded differently from your search, even from the activity screen', async (t) => {
+  const [host] = await people(1);
+  t.after(() => host.sock.close());
+  // Never searched (idle) — the room's wording is enough.
+  const started = once(host.sock, 'room-start');
+  assert.deepStrictEqual(await call(host.sock, 'create-room', { capacity: 3, activity: '  Silent   study session ' }), { ok: true });
+  const rs = await started;
+  assert.strictEqual(rs.activity, 'Silent study session');
+  assert.strictEqual(rs.members[0].activity, 'Silent study session', 'host’s activity follows the room');
+  assert.ok((await call(host.sock, 'create-room', { capacity: 3, activity: 'another' })).error, 'one room at a time');
+});

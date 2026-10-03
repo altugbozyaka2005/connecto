@@ -152,3 +152,14 @@ test('inviting a friend into a call: host invites join directly (and make space)
   await call(host.sock, 'join-respond', { from: pal2.sock.id, accept: true });
   assert.strictEqual((await in2).members.length, 4);
 });
+
+test('a background search can be worded differently from the live search', async (t) => {
+  const a = await signedInSocket(base, { firstName: 'Kerem' });
+  t.after(() => a.sock.close());
+  assert.ok((await call(a.sock, 'bg-start', { hours: 3, activity: '   ' })).error, 'needs some wording');
+  await call(a.sock, 'set-activity', { activity: 'bg wording test cooking' });
+  const res = await call(a.sock, 'bg-start', { hours: 3, activity: 'Chess partner this weekend' });
+  assert.strictEqual(res.activity, 'Chess partner this weekend');
+  const inbox = await waitFor(a.sock, 'inbox', (p) => p.background);
+  assert.strictEqual(inbox.background.activity, 'Chess partner this weekend');
+});

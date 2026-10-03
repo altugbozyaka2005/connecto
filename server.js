@@ -883,20 +883,23 @@ io.on('connection', (socket) => {
 
   // ---- Background search ----
 
-  socket.on('bg-start', ({ hours, notify } = {}, ack) => {
+  // `activity` (optional) can differ from the live search, e.g. "anyone for chess this weekend".
+  socket.on('bg-start', ({ hours, notify, activity } = {}, ack) => {
     const u = me();
-    if (!u || !u.activity) return ack?.({ error: 'Tell us what you’re doing first.' });
+    if (!u) return;
+    const wording = clean(activity, 140) || u.activity;
+    if (!wording) return ack?.({ error: 'Tell us what you’re looking for.' });
     const h = Number(hours);
     if (!background.DURATIONS_H.includes(h)) return ack?.({ error: 'Choose how long to keep searching.' });
-    const mine = background.start(u.accountId, u.activity, h);
+    const mine = background.start(u.accountId, wording, h);
     background.setNotify(u.accountId, notify !== false);
     // Tell people with a very similar background search who aren't here right now.
     for (const bg of background.active()) {
       if (bg.accountId === u.accountId || isOnline(bg.accountId) || safety.isBlocked(u.accountId, bg.accountId)) continue;
-      if (score(mine.profile, bg.profile) >= BG_NOTIFY_SCORE) background.notify(bg.accountId, 'match', { name: u.name, activity: u.activity });
+      if (score(mine.profile, bg.profile) >= BG_NOTIFY_SCORE) background.notify(bg.accountId, 'match', { name: u.name, activity: wording });
     }
     scheduleRecompute();
-    ack?.({ ok: true, expiresAt: mine.expiresAt });
+    ack?.({ ok: true, expiresAt: mine.expiresAt, activity: wording });
   });
 
   socket.on('bg-stop', (_p, ack) => {
@@ -1005,9 +1008,17 @@ io.on('connection', (socket) => {
   // ---- Group rooms ----
 
   // Start a group room from search; you're the host and it's open right away.
-  socket.on('create-room', ({ capacity } = {}, ack) => {
+  // `activity` (optional) lets the host word the room differently from their current search.
+  socket.on('create-room', ({ capacity, activity } = {}, ack) => {
     const u = me();
-    if (!u || u.status !== 'searching') return ack?.({ error: 'Tell us what you’re doing first.' });
+    if (!u || u.status === 'in-room') return ack?.({ error: 'Leave your current call first.' });
+    const wording = clean(activity, 140);
+    if (wording && wording !== u.activity) {
+      u.activity = wording;
+      u.profile = analyze(wording);
+    }
+    if (!u.activity) return ack?.({ error: 'Tell us what the room is for.' });
+    u.status = 'searching';
     const cap = Number(capacity);
     if (!Number.isInteger(cap) || cap < 2 || cap > MAX_ROOM_SIZE) return ack?.({ error: `Choose a size from 2 to ${MAX_ROOM_SIZE}.` });
     const room = newRoom({ capacity: cap, open: true, hostId: u.id, activity: u.activity });

@@ -287,6 +287,17 @@
 
         <div class="grid" id="match-grid"></div>
 
+        <section class="away-section" id="away-section" hidden>
+          <div class="away-head">
+            <h3>
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z"/></svg>
+              Searching in the background
+            </h3>
+            <p>These people aren't online right now, so you can't call them yet. Send a request and they'll see it when they're back.</p>
+          </div>
+          <div class="grid" id="away-grid"></div>
+        </section>
+
         <div class="empty" id="empty-state">
           <div class="radar" aria-hidden="true"><span></span><span></span><span></span></div>
           <h3>Looking for people…</h3>
@@ -306,6 +317,11 @@
         </div>
         <div class="room-actions">
           <button class="btn btn-ghost" id="add-friend-btn" type="button">Add friend</button>
+          <button class="btn btn-ghost room-friends-btn" type="button" aria-label="Friends">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5Z"/></svg>
+            <span class="friends-label">Friends</span>
+            <span class="badge friends-badge" hidden></span>
+          </button>
           <button class="btn btn-ghost" id="room-btn" type="button">
             <span id="room-btn-label">Open to others</span> <span class="badge" id="room-badge" hidden></span>
           </button>
@@ -326,7 +342,7 @@
             <div class="tile-placeholder" id="local-placeholder">
               <div class="avatar avatar-md" id="local-avatar"></div>
             </div>
-            <span class="tile-label">You</span>
+            <span class="tile-label" id="local-label">You</span>
           </div>
 
           <div class="controls">
@@ -376,7 +392,7 @@
       </button>
       <div class="avatar avatar-lg"></div>
       <div class="match-info">
-        <p class="match-name"><span class="name-text"></span> <span class="pill-friend" hidden>Friend</span> <span class="pill-away" hidden>Away</span></p>
+        <p class="match-name"><span class="name-text"></span> <span class="pill-friend" hidden>Friend</span> <span class="pill-away" hidden>🕓 Background search</span></p>
         <p class="match-meta"></p>
         <p class="match-activity"></p>
         <p class="match-bio"></p>
@@ -418,7 +434,7 @@
         <div class="avatar avatar-xl"></div>
         <p class="tile-status">Connecting…</p>
       </div>
-      <span class="tile-label"><span class="tile-name"></span><span class="host-tag" hidden>Host</span><span class="muted-tag" hidden>🔇</span></span>
+      <span class="tile-label"><span class="tile-name"></span><span class="host-tag" hidden>(host)</span><span class="muted-tag" hidden>🔇</span></span>
       <button class="tile-more" type="button" aria-label="Options" aria-haspopup="menu">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
       </button>
@@ -465,7 +481,11 @@
   <!-- Start a group room -->
   <dialog class="dialog dialog-sm" id="create-room-dialog" aria-labelledby="create-room-title">
     <h3 id="create-room-title">Start a group room</h3>
-    <p class="form-intro">You'll host a room for “<span id="create-room-activity"></span>”. It shows up for people doing something similar, and you decide who gets in.</p>
+    <p class="form-intro">You'll host this room. It shows up for people doing something similar, and you decide who gets in.</p>
+    <label class="field">
+      <span>What's the room for?</span>
+      <input type="text" id="create-room-activity" maxlength="140" placeholder="e.g. Silent study session, cameras on" />
+    </label>
     <label class="field">
       <span>Up to how many people (including you)?</span>
       <select id="create-room-size">
@@ -564,6 +584,7 @@
   <!-- Friends -->
   <dialog class="dialog" id="friends-dialog" aria-labelledby="friends-title">
     <h3 id="friends-title">Friends</h3>
+    <p class="form-intro" id="friends-call-note" hidden></p>
     <section id="friend-requests-section" hidden>
       <p class="eyebrow">Wants to be friends</p>
       <ul class="people-list" id="friend-requests"></ul>
@@ -578,7 +599,11 @@
   <!-- Background search -->
   <dialog class="dialog dialog-sm" id="bg-dialog" aria-labelledby="bg-title">
     <h3 id="bg-title">Search in the background</h3>
-    <p class="form-intro">We'll keep your search for “<span id="bg-activity"></span>” running after you close Connecto. People searching live will see you as <strong>Away</strong> and can send you a request. You'll also see others who are searching in the background for something similar.</p>
+    <p class="form-intro">We'll keep searching after you close Connecto. People searching live will see you under <strong>Searching in the background</strong> and can send you a request. You'll also see others searching in the background for something similar.</p>
+    <label class="field">
+      <span>What are you looking for?</span>
+      <input type="text" id="bg-activity" maxlength="140" placeholder="e.g. Chess partner this weekend" />
+    </label>
     <label class="field">
       <span>Keep searching for</span>
       <select id="bg-hours">

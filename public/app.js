@@ -460,13 +460,20 @@
     $('#n-all').textContent = peopleAll.length + groups.length || '';
     $('#n-people').textContent = peopleAll.length || '';
     $('#n-groups').textContent = groups.length || '';
+    // Live people and groups first; background searchers get their own section below,
+    // since you can't call them right now.
     const items = [
-      ...(filter !== 'groups' ? peopleAll.map((m) => ({ kind: 'person', m })) : []),
+      ...(filter !== 'groups' ? people.map((m) => ({ kind: 'person', m })) : []),
       ...(filter !== 'people' ? groups.map((g) => ({ kind: 'group', m: g })) : []),
-    ].sort((a, b) => (a.m.away === b.m.away ? 0 : a.m.away ? 1 : -1) || b.m.score - a.m.score);
+    ].sort((a, b) => b.m.score - a.m.score);
     const grid = $('#match-grid');
     grid.textContent = '';
     for (const it of items) grid.append(it.kind === 'group' ? groupCard(it.m) : personCard(it.m));
+    const awayGrid = $('#away-grid');
+    awayGrid.textContent = '';
+    const showAway = filter !== 'groups' && away.length > 0;
+    $('#away-section').hidden = !showAway;
+    if (showAway) for (const m of away) awayGrid.append(personCard(m));
     $('#empty-state').toggleAttribute('data-show', items.length === 0);
     $('#empty-state h3').textContent = filter === 'groups' ? 'No open groups yet' : 'Looking for people…';
     $('#empty-state p').textContent = filter === 'groups'
@@ -716,6 +723,7 @@
     if (o.length === 1 && total === 2) state.lastPeer = o[0];
 
     $('#stage').dataset.count = String(o.length);
+    $('#local-label').textContent = room.isHost ? 'You (host)' : 'You';
     $('#waiting').hidden = o.length > 0;
     for (const id of [...peers.keys()]) if (!memberById(id)) closePeer(id);
     for (const m of o) ensureTile(m);
@@ -1120,27 +1128,21 @@
   document.addEventListener('click', (e) => { if (!e.target.closest('#tile-menu')) closeTileMenu(); });
 
   // ---- Group rooms from search ----
-  function openCreateRoom() {
-    $('#create-room-activity').textContent = state.activity;
+  // The wording is pre-filled with your search but can be changed before starting.
+  function openCreateRoom(wording) {
+    $('#create-room-activity').value = wording ?? state.activity ?? '';
     openDialog('#create-room-dialog');
+    $('#create-room-activity').focus();
   }
-  $('#start-group-btn').addEventListener('click', openCreateRoom);
-  $('#start-group-from-prompt').addEventListener('click', async () => {
-    const activity = $('#activity-input').value.trim();
-    if (!activity) {
-      $('#activity-error').textContent = 'First tell us what you’re doing. Your group room will be for that.';
-      return $('#activity-input').focus();
-    }
-    const res = await emit('set-activity', { activity });
-    if (res.error) { $('#activity-error').textContent = res.error; return; }
+  $('#start-group-btn').addEventListener('click', () => openCreateRoom());
+  $('#start-group-from-prompt').addEventListener('click', () => openCreateRoom($('#activity-input').value.trim()));
+  $('#create-room-go').addEventListener('click', async () => {
+    const activity = $('#create-room-activity').value.trim();
+    if (!activity) { $('#create-room-dialog .form-error').textContent = 'Tell people what the room is for.'; return; }
+    const res = await emit('create-room', { capacity: Number($('#create-room-size').value), activity });
+    if (res.error) { $('#create-room-dialog .form-error').textContent = res.error; return; }
     state.activity = activity;
     $('#my-activity').textContent = activity;
-    show('screen-matches');
-    openCreateRoom();
-  });
-  $('#create-room-go').addEventListener('click', async () => {
-    const res = await emit('create-room', { capacity: Number($('#create-room-size').value) });
-    if (res.error) { $('#create-room-dialog .form-error').textContent = res.error; return; }
     $('#create-room-dialog').close();
   });
 
@@ -1210,13 +1212,22 @@
       reqList.append(li);
     }
 
+    const note = $('#friends-call-note');
+    note.hidden = !state.room;
+    if (state.room) {
+      note.textContent = state.room.isHost || !state.room.hostId
+        ? 'Invite friends to this call. As the host, anyone you invite joins as soon as they accept.'
+        : 'Invite friends to this call. You’re not the host, so the host approves anyone you invite.';
+    }
     const list = $('#friend-list');
     list.textContent = '';
     $('#friends-empty').hidden = friends.length > 0 || requests.length > 0;
     for (const f of friends) {
       const { li, who } = personRow(f, 'presence');
       const line = document.createElement('span');
-      line.textContent = f.status === 'searching' ? `Doing “${f.activity}”` : [STATUS_TEXT[f.status], metaLine(f)].filter(Boolean).join(' · ');
+      line.textContent = f.status === 'searching' ? `Matching on “${f.activity}”`
+        : f.status === 'in-call' && f.activity ? `In a call · “${f.activity}”`
+        : [STATUS_TEXT[f.status], metaLine(f)].filter(Boolean).join(' · ');
       who.append(line);
       if (f.status === 'online' || f.status === 'searching') {
         const inCall = !!state.room;
@@ -1274,7 +1285,7 @@
     toast({ title: `You and ${name} are now friends 🎉`, body: 'Find them anytime under Friends.' });
   });
 
-  document.querySelectorAll('.friends-btn').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('.friends-btn, .room-friends-btn').forEach((b) => b.addEventListener('click', () => {
     renderFriends();
     openDialog('#friends-dialog');
   }));
@@ -1394,24 +1405,25 @@
 
   function openBgDialog() {
     const bg = state.inbox.background;
-    $('#bg-activity').textContent = bg?.activity || state.activity;
+    $('#bg-activity').value = bg?.activity || state.activity || '';
     $('#bg-notify').checked = state.inbox.notifyEmail;
     $('#bg-on').hidden = !bg;
-    if (bg) $('#bg-on').textContent = bg.activity === state.activity
-      ? `On until ${untilText(bg.expiresAt)}. Starting again extends it.`
-      : `Currently on for “${bg.activity}”. Starting again switches it to “${state.activity}”.`;
+    if (bg) $('#bg-on').textContent = `On for “${bg.activity}” until ${untilText(bg.expiresAt)}. Saving again updates it.`;
     $('#bg-stop').hidden = !bg;
     $('#bg-go').textContent = bg ? 'Update' : 'Start';
     openDialog('#bg-dialog');
+    $('#bg-activity').focus();
   }
   $('#bg-btn').addEventListener('click', openBgDialog);
   $('#bg-empty-btn').addEventListener('click', openBgDialog);
 
   $('#bg-go').addEventListener('click', async () => {
-    const res = await emit('bg-start', { hours: Number($('#bg-hours').value), notify: $('#bg-notify').checked });
+    const activity = $('#bg-activity').value.trim();
+    if (!activity) { $('#bg-dialog .form-error').textContent = 'Tell us what you’re looking for.'; return; }
+    const res = await emit('bg-start', { hours: Number($('#bg-hours').value), notify: $('#bg-notify').checked, activity });
     if (res.error) { $('#bg-dialog .form-error').textContent = res.error; return; }
     $('#bg-dialog').close();
-    toast({ title: 'Background search on', body: `We’ll keep looking until ${untilText(res.expiresAt)}, even after you close Connecto.` });
+    toast({ title: 'Background search on', body: `Looking for “${res.activity}” until ${untilText(res.expiresAt)}, even after you close Connecto.` });
   });
   $('#bg-stop').addEventListener('click', async () => {
     await emit('bg-stop');
