@@ -1394,13 +1394,26 @@
     return sameDay ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
   }
 
+  const short = (t, n = 28) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+
+  // Background status shows in three places: the status card button, the activity screen chip,
+  // and the Background search page.
   function renderBgControls() {
     const bg = state.inbox.background;
     const btn = $('#bg-btn');
     btn.toggleAttribute('data-on', !!bg);
-    $('#bg-btn-label').textContent = bg ? `Background search on · until ${untilText(bg.expiresAt)}` : 'Search in background';
+    $('#bg-btn-label').textContent = bg ? `Background: “${short(bg.activity)}”` : 'Search in background';
+    btn.title = bg ? `Background search for “${bg.activity}” until ${untilText(bg.expiresAt)}` : '';
     $('#bg-empty-btn').hidden = !!bg;
     $('#bg-empty-hint').hidden = !!bg;
+    // On the activity screen: make clear the background search keeps going whatever you search live.
+    $('#bg-chip').hidden = !bg;
+    if (bg) $('#bg-chip-text').textContent = `Also searching in the background for “${short(bg.activity, 40)}” until ${untilText(bg.expiresAt)}`;
+  }
+
+  function openBgPage() {
+    renderInbox();
+    openDialog('#inbox-dialog');
   }
 
   function openBgDialog() {
@@ -1414,8 +1427,18 @@
     openDialog('#bg-dialog');
     $('#bg-activity').focus();
   }
-  $('#bg-btn').addEventListener('click', openBgDialog);
+  // Off: go straight to setting one up. On: show its status page.
+  $('#bg-btn').addEventListener('click', () => (state.inbox.background ? openBgPage() : openBgDialog()));
   $('#bg-empty-btn').addEventListener('click', openBgDialog);
+  $('#bg-chip-manage').addEventListener('click', openBgPage);
+  document.querySelectorAll('.bg-menu-btn').forEach((b) => b.addEventListener('click', () => { closeMenus(); openBgPage(); }));
+  $('#bgp-start').addEventListener('click', () => { $('#inbox-dialog').close(); openBgDialog(); });
+  $('#bgp-edit').addEventListener('click', () => { $('#inbox-dialog').close(); openBgDialog(); });
+  $('#bgp-stop').addEventListener('click', async () => {
+    await emit('bg-stop');
+    toast({ title: 'Background search stopped', timeout: 2500 });
+  });
+  $('#bgp-notify').addEventListener('change', (e) => emit('notify-email', { on: e.target.checked }));
 
   $('#bg-go').addEventListener('click', async () => {
     const activity = $('#bg-activity').value.trim();
@@ -1436,15 +1459,44 @@
     return { searching: 'Online now', online: 'Online now', 'in-call': 'In a call', offline: 'Offline' }[p.status] || '';
   }
 
+  function timeLeft(ms) {
+    const min = Math.max(0, Math.round((ms - Date.now()) / 60000));
+    if (min < 60) return `${min} min left`;
+    const h = Math.round(min / 60);
+    return h < 48 ? `${h}h left` : `${Math.round(h / 24)} days left`;
+  }
+
   function renderInbox() {
     const { background: bg, incoming, outgoing, ready, matches } = state.inbox;
+    const history = state.inbox.history || [];
     const urgent = incoming.length + ready.filter((r) => r.available).length;
     document.querySelectorAll('.inbox-badge').forEach((b) => { b.textContent = urgent; b.hidden = !urgent; });
     renderBgControls();
 
-    $('#inbox-bg-line').textContent = bg
-      ? `Searching in the background for “${bg.activity}” until ${untilText(bg.expiresAt)}.`
-      : 'Background search is off.';
+    // Status block
+    $('#bgp-status').toggleAttribute('data-on', !!bg);
+    $('#bgp-title').textContent = bg ? `Searching for “${bg.activity}”` : 'Background search is off';
+    $('#bgp-detail').textContent = bg
+      ? `Started ${ago(bg.startedAt)} · until ${untilText(bg.expiresAt)} (${timeLeft(bg.expiresAt)}). It keeps running when you close Connecto, and doesn't affect what you search live${state.activity && state.activity !== bg.activity ? ` (“${short(state.activity)}”)` : ''}.`
+      : 'Turn it on to keep looking after you close the tab. You can search live for something else at the same time.';
+    $('#bgp-start').hidden = !!bg;
+    $('#bgp-edit').hidden = !bg;
+    $('#bgp-stop').hidden = !bg;
+    $('#bgp-notify').checked = !!state.inbox.notifyEmail;
+
+    // What happened since the last visit
+    const fresh = {
+      requests: incoming.filter((r) => r.new).length,
+      accepted: ready.filter((r) => r.new).length,
+      matches: matches.filter((m) => m.new).length,
+    };
+    const parts = [
+      fresh.matches && `${fresh.matches} new ${fresh.matches === 1 ? 'match' : 'matches'}`,
+      fresh.requests && `${fresh.requests} new ${fresh.requests === 1 ? 'request' : 'requests'}`,
+      fresh.accepted && `${fresh.accepted} accepted`,
+    ].filter(Boolean);
+    $('#bgp-summary').hidden = !parts.length;
+    $('#bgp-summary').textContent = parts.length ? `While you were away: ${parts.join(' · ')}` : '';
 
     const fill = (listId, sectionId, items, build) => {
       const list = $(listId);
@@ -1452,8 +1504,14 @@
       $(sectionId).hidden = !items.length;
       for (const it of items) list.append(build(it));
     };
-    const row = (p, line) => {
+    const row = (p, line, isNew) => {
       const { li, who } = personRow({ ...p, status: p.status }, 'presence');
+      if (isNew) {
+        const tag = document.createElement('span');
+        tag.className = 'new-tag';
+        tag.textContent = 'NEW';
+        who.firstChild.append(tag);
+      }
       const span = document.createElement('span');
       span.textContent = line;
       who.append(span);
@@ -1461,7 +1519,7 @@
     };
 
     fill('#inbox-ready', '#inbox-ready-section', ready, (r) => {
-      const li = row(r.person, `You both want to connect · ${statusLine(r.person)}`);
+      const li = row(r.person, `“${r.activity}” · ${statusLine(r.person)}`, r.new);
       const call = button(r.available ? 'Call now' : 'Not online', 'btn btn-primary', async () => {
         const res = await emit('connect-call', { accountId: r.person.id });
         if (res.error) return toast({ title: 'Couldn’t call', body: res.error });
@@ -1473,7 +1531,7 @@
       return li;
     });
     fill('#inbox-incoming', '#inbox-incoming-section', incoming, (r) => {
-      const li = row(r.person, `“${r.activity}” · ${ago(r.at)}`);
+      const li = row(r.person, `“${r.activity}” · ${ago(r.at)}`, r.new);
       li.append(
         button('Decline', 'btn btn-ghost', () => emit('connect-respond', { id: r.id, accept: false })),
         button('Accept', 'btn btn-good', async () => {
@@ -1485,7 +1543,7 @@
       return li;
     });
     fill('#inbox-matches', '#inbox-matches-section', matches, (m) => {
-      const li = row(m.person, `“${m.activity}” · ${m.score}% match`);
+      const li = row(m.person, `“${m.activity}” · ${m.score}% match · found ${ago(m.foundAt)}`, m.new);
       li.append(button('Send request', 'btn btn-primary', async (e) => {
         e.currentTarget.disabled = true;
         const res = await emit('connect-request', { accountId: m.person.id });
@@ -1498,7 +1556,11 @@
       li.append(button('Cancel', 'btn btn-ghost', () => emit('connect-cancel', { id: r.id })));
       return li;
     });
-    $('#inbox-empty').hidden = !!(ready.length || incoming.length || matches.length || outgoing.length);
+    fill('#inbox-history', '#inbox-history-section', history, (h) => {
+      const li = row(h.person, `Talked ${ago(h.at)} · “${h.activity}”${h.friend ? ' · friends' : ''}`);
+      return li;
+    });
+    $('#inbox-empty').hidden = !!(ready.length || incoming.length || matches.length || outgoing.length || history.length);
   }
 
   socket.on('inbox', (payload) => {
@@ -1509,22 +1571,24 @@
       shownAwaySummary = true;
       const n = payload.incoming.length;
       const r = payload.ready.length;
-      if (n || r) {
+      const m = payload.matches.filter((x) => x.new).length;
+      if (n || r || m) {
         const el = toast({
           title: 'While you were away',
-          body: [n && `${n} ${n === 1 ? 'person wants' : 'people want'} to connect`, r && `${r} accepted your request`].filter(Boolean).join(' · '),
+          body: [
+            n && `${n} ${n === 1 ? 'person wants' : 'people want'} to connect`,
+            r && `${r} accepted your request`,
+            m && `${m} new background ${m === 1 ? 'match' : 'matches'}`,
+          ].filter(Boolean).join(' · '),
           timeout: 12000,
-          actions: [{ label: 'View', cls: 'btn-primary', onClick: () => { dismiss(el); renderInbox(); openDialog('#inbox-dialog'); } }],
+          actions: [{ label: 'View', cls: 'btn-primary', onClick: () => { dismiss(el); openBgPage(); } }],
         });
       }
     }
   });
   socket.on('disconnect', () => { shownAwaySummary = false; });
 
-  document.querySelectorAll('.inbox-btn').forEach((b) => b.addEventListener('click', () => {
-    renderInbox();
-    openDialog('#inbox-dialog');
-  }));
+  document.querySelectorAll('.inbox-btn').forEach((b) => b.addEventListener('click', openBgPage));
 
   socket.on('connect-request', ({ id, from, activity }) => {
     const el = toast({

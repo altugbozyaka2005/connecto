@@ -180,7 +180,7 @@
       <header class="topbar">
         <div class="brand-sm"><div class="logo logo-sm" aria-hidden="true"><span></span><span></span></div>Connecto</div>
         <div class="topbar-actions">
-        <button class="btn btn-ghost inbox-btn" type="button" aria-label="Requests">
+        <button class="btn btn-ghost inbox-btn" type="button" aria-label="Background search and requests" title="Background search & requests">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3a1.5 1.5 0 0 0-3 0v1.16A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>
           <span class="badge inbox-badge" hidden></span>
         </button>
@@ -197,6 +197,7 @@
           </summary>
           <div class="menu">
             <p class="menu-email"></p>
+            <button type="button" class="menu-item bg-menu-btn">Background search</button>
             <button type="button" class="menu-item edit-profile-btn">Edit profile</button>
             <button type="button" class="menu-item change-photo-btn">Change photo</button>
             <button type="button" class="menu-item blocked-btn">Blocked people</button>
@@ -218,6 +219,11 @@
             <p class="form-error" id="activity-error" role="alert"></p>
           </form>
           <p class="or-group">or <button type="button" class="link-btn link-accent" id="start-group-from-prompt">start a group room</button> for this activity</p>
+          <p class="bg-chip" id="bg-chip" hidden>
+            <span class="bgp-dot" aria-hidden="true"></span>
+            <span id="bg-chip-text"></span>
+            <button type="button" class="link-btn link-accent" id="bg-chip-manage">Manage</button>
+          </p>
           <div class="chips" id="suggestions" aria-label="Suggestions"></div>
         </div>
       </main>
@@ -228,7 +234,7 @@
       <header class="topbar">
         <div class="brand-sm"><div class="logo logo-sm" aria-hidden="true"><span></span><span></span></div>Connecto</div>
         <div class="topbar-actions">
-        <button class="btn btn-ghost inbox-btn" type="button" aria-label="Requests">
+        <button class="btn btn-ghost inbox-btn" type="button" aria-label="Background search and requests" title="Background search & requests">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3a1.5 1.5 0 0 0-3 0v1.16A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>
           <span class="badge inbox-badge" hidden></span>
         </button>
@@ -245,6 +251,7 @@
           </summary>
           <div class="menu">
             <p class="menu-email"></p>
+            <button type="button" class="menu-item bg-menu-btn">Background search</button>
             <button type="button" class="menu-item edit-profile-btn">Edit profile</button>
             <button type="button" class="menu-item change-photo-btn">Change photo</button>
             <button type="button" class="menu-item blocked-btn">Blocked people</button>
@@ -626,12 +633,31 @@
     </div>
   </dialog>
 
-  <!-- Requests inbox -->
-  <dialog class="dialog" id="inbox-dialog" aria-labelledby="inbox-title">
-    <h3 id="inbox-title">Requests</h3>
-    <p class="form-intro" id="inbox-bg-line"></p>
+  <!-- Background search page (status, matches found, requests, history) -->
+  <dialog class="dialog dialog-wide" id="inbox-dialog" aria-labelledby="inbox-title">
+    <h3 id="inbox-title">Background search</h3>
+    <div class="bgp-status" id="bgp-status">
+      <div class="bgp-head">
+        <span class="bgp-dot" aria-hidden="true"></span>
+        <div>
+          <strong id="bgp-title"></strong>
+          <p id="bgp-detail"></p>
+        </div>
+      </div>
+      <div class="bgp-actions">
+        <button type="button" class="btn btn-primary" id="bgp-start">Start a background search</button>
+        <button type="button" class="btn btn-ghost" id="bgp-edit">Edit</button>
+        <button type="button" class="btn btn-ghost bgp-stop" id="bgp-stop">Stop</button>
+      </div>
+      <label class="check bgp-notify">
+        <input type="checkbox" id="bgp-notify" />
+        <span>Email me when someone wants to connect (at most one every few hours)</span>
+      </label>
+    </div>
+    <p class="bgp-summary" id="bgp-summary" hidden></p>
+
     <section class="inbox-section" id="inbox-ready-section" hidden>
-      <p class="eyebrow">Ready to connect</p>
+      <p class="eyebrow">Ready to connect · you both said yes</p>
       <ul class="people-list" id="inbox-ready"></ul>
     </section>
     <section class="inbox-section" id="inbox-incoming-section" hidden>
@@ -639,14 +665,18 @@
       <ul class="people-list" id="inbox-incoming"></ul>
     </section>
     <section class="inbox-section" id="inbox-matches-section" hidden>
-      <p class="eyebrow">Also searching in the background</p>
+      <p class="eyebrow">Matches found · also searching in the background</p>
       <ul class="people-list" id="inbox-matches"></ul>
     </section>
     <section class="inbox-section" id="inbox-outgoing-section" hidden>
       <p class="eyebrow">Waiting for a reply</p>
       <ul class="people-list" id="inbox-outgoing"></ul>
     </section>
-    <p class="form-intro" id="inbox-empty" hidden>Nothing here yet. Turn on <strong>Search in background</strong> and requests from people who match you will show up here, even after you close the tab.</p>
+    <section class="inbox-section" id="inbox-history-section" hidden>
+      <p class="eyebrow">Recently connected</p>
+      <ul class="people-list" id="inbox-history"></ul>
+    </section>
+    <p class="form-intro" id="inbox-empty" hidden>No matches or requests yet. While your background search is on, people who match it show up here, even after you close the tab.</p>
     <div class="dialog-actions">
       <button type="button" class="btn btn-ghost" data-close>Close</button>
     </div>

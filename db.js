@@ -95,13 +95,13 @@ db.exec(`
   );
 
   -- "I'd like to connect" sent to someone who isn't online right now.
-  -- pending -> accepted (both want it; call when both are online) | declined.
+  -- pending -> accepted (both want it; call when both are online) -> done (they talked) | declined.
   CREATE TABLE IF NOT EXISTS connect_requests (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     from_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     to_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     activity   TEXT NOT NULL,       -- what the sender was doing when they asked
-    status     TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')),
+    status     TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined', 'done')),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
@@ -122,5 +122,31 @@ if (!columns.has('timezone')) db.exec('ALTER TABLE users ADD COLUMN timezone TEX
 // Email notifications for background search (on by default, throttled).
 if (!columns.has('notify_email')) db.exec('ALTER TABLE users ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 1');
 if (!columns.has('notified_at')) db.exec('ALTER TABLE users ADD COLUMN notified_at INTEGER');
+// When their last tab closed: anything newer is "new while you were away".
+if (!columns.has('last_seen_at')) db.exec('ALTER TABLE users ADD COLUMN last_seen_at INTEGER');
+
+// connect_requests gained a 'done' status (they talked) so it can show as history.
+// SQLite can't alter a CHECK constraint, so rebuild the table once.
+const crSql = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'connect_requests'").get()?.sql || '';
+if (!crSql.includes("'done'")) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE connect_requests RENAME TO connect_requests_old;
+    CREATE TABLE connect_requests (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      to_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      activity   TEXT NOT NULL,
+      status     TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined', 'done')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    INSERT INTO connect_requests SELECT * FROM connect_requests_old;
+    DROP TABLE connect_requests_old;
+    CREATE INDEX IF NOT EXISTS connect_requests_to ON connect_requests(to_id, status);
+    CREATE INDEX IF NOT EXISTS connect_requests_from ON connect_requests(from_id, status);
+    COMMIT;
+  `);
+}
 
 module.exports = db;

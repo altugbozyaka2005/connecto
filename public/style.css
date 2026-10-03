@@ -369,6 +369,26 @@ p { margin: 0; }
 #bg-stop { margin-right: auto; color: var(--danger); }
 #bg-stop[hidden] { display: none; }
 
+.dialog-wide { width: min(560px, calc(100vw - 32px)); }
+.bgp-status { border: 1px solid var(--border); border-radius: 16px; padding: 16px; background: var(--surface-2); margin: 8px 0 14px; display: grid; gap: 12px; }
+.bgp-status[data-on] { border-color: color-mix(in srgb, var(--good) 45%, var(--border)); background: color-mix(in srgb, var(--good) 7%, var(--surface)); }
+.bgp-head { display: flex; gap: 12px; align-items: flex-start; }
+.bgp-head p { color: var(--muted); font-size: 14px; margin-top: 2px; line-height: 1.45; word-break: break-word; }
+.bgp-dot { flex: none; width: 10px; height: 10px; margin-top: 6px; border-radius: 50%; background: var(--muted); }
+[data-on] .bgp-dot, .bg-chip .bgp-dot { background: var(--good); animation: ping 1.8s infinite; }
+.bgp-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.bgp-actions .btn { padding: 9px 16px; }
+.bgp-actions [hidden] { display: none; }
+.bgp-stop { color: var(--danger); }
+.bgp-notify { margin: 0; font-size: 13px; }
+.bgp-summary { margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; background: var(--accent-soft); font-size: 14px; font-weight: 600; }
+.bgp-summary[hidden] { display: none; }
+.new-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: 10px; font-weight: 800; letter-spacing: .04em; vertical-align: middle; }
+.bg-chip { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; padding: 8px 14px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--good) 45%, var(--border)); background: var(--surface); font-size: 14px; color: var(--muted); max-width: 100%; }
+.bg-chip[hidden] { display: none; }
+.bg-chip .bgp-dot { margin-top: 0; width: 8px; height: 8px; }
+#bg-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---------- Tag input ---------- */
 .tag-input { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface-2); }
 .tag-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }

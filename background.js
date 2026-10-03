@@ -6,6 +6,7 @@ const { analyze } = require('./matcher');
 const DURATIONS_H = [3, 12, 24, 72];
 const PENDING_TTL_MS = 7 * 24 * 60 * 60 * 1000; // unanswered requests disappear after a week
 const ACCEPTED_TTL_MS = 48 * 60 * 60 * 1000; // "both want to connect" lasts two days
+const HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000; // "recently connected" shows a week
 const MAX_REQUESTS_PER_DAY = 20;
 const EMAIL_EVERY_MS = 3 * 60 * 60 * 1000; // at most one notification email per 3 hours
 
@@ -27,6 +28,7 @@ setInterval(() => {
   db.prepare('DELETE FROM background_searches WHERE expires_at <= ?').run(now);
   db.prepare("DELETE FROM connect_requests WHERE (status = 'pending' AND created_at < ?) OR (status = 'accepted' AND updated_at < ?) OR (status = 'declined' AND updated_at < ?)")
     .run(now - PENDING_TTL_MS, now - ACCEPTED_TTL_MS, now - PENDING_TTL_MS);
+  db.prepare("DELETE FROM connect_requests WHERE status = 'done' AND updated_at < ?").run(now - HISTORY_TTL_MS);
 }, 5 * 60 * 1000).unref();
 
 function active() {
@@ -111,9 +113,21 @@ function connected(a, b) {
   return between(a, b)?.status === 'accepted';
 }
 
-// They had their call: nothing left to show in the inbox.
+// They had their call: the request becomes history ("recently connected").
 function settle(a, b) {
-  db.prepare(`DELETE FROM connect_requests WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))`).run(a, b, b, a);
+  db.prepare(`UPDATE connect_requests SET status = 'done', updated_at = ?
+              WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)) AND status IN ('pending', 'accepted')`)
+    .run(Date.now(), a, b, b, a);
+}
+
+// Blocking: forget everything between them, including history.
+function forget(a, b) {
+  db.prepare('DELETE FROM connect_requests WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)').run(a, b, b, a);
+}
+
+function history(accountId) {
+  return db.prepare(`SELECT * FROM connect_requests WHERE (from_id = ? OR to_id = ?) AND status = 'done' AND updated_at > ?
+                     ORDER BY updated_at DESC LIMIT 20`).all(accountId, accountId, Date.now() - HISTORY_TTL_MS);
 }
 
 // ---------- Email ----------
@@ -132,5 +146,5 @@ function setNotify(accountId, on) {
 }
 
 module.exports = {
-  DURATIONS_H, active, get, start, stop, request, respond, cancel, connected, settle, between, forAccount, notify, setNotify,
+  DURATIONS_H, active, get, start, stop, request, respond, cancel, connected, settle, forget, history, between, forAccount, notify, setNotify,
 };

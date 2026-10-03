@@ -66,6 +66,8 @@ test('background search: away card, request while offline, email, inbox, accept,
   opened.push(back);
   const inbox = await waitFor(back, 'inbox', (p) => p.incoming.length === 2);
   assert.strictEqual(inbox.background.activity, 'bg test learning the violin');
+  assert.ok(inbox.lastSeen, 'last visit recorded when her tab closed');
+  assert.ok(inbox.incoming.every((r) => r.new), 'requests made while she was away are flagged new');
   const fromBaris = inbox.incoming.find((r) => r.person.id === live.user.id);
   assert.strictEqual(fromBaris.activity, 'bg test practicing violin');
 
@@ -83,8 +85,9 @@ test('background search: away card, request while offline, email, inbox, accept,
   assert.deepStrictEqual(await call(back, 'respond-request', { from: live.sock.id, accept: true }), { ok: true });
   await rooms;
 
-  // After the call starts, that request is done and leaves both inboxes.
-  await waitFor(live.sock, 'inbox', (p) => !p.ready.length);
+  // After the call starts, that request is done: it leaves "ready" and shows as history.
+  const after = await waitFor(live.sock, 'inbox', (p) => !p.ready.length);
+  assert.strictEqual(after.history[0].person.id, away.user.id);
   assert.ok((await call(live.sock, 'connect-call', { accountId: away.user.id })).error, 'no longer "connected" once they talked');
 });
 
@@ -162,4 +165,26 @@ test('a background search can be worded differently from the live search', async
   assert.strictEqual(res.activity, 'Chess partner this weekend');
   const inbox = await waitFor(a.sock, 'inbox', (p) => p.background);
   assert.strictEqual(inbox.background.activity, 'Chess partner this weekend');
+});
+
+test('a background search keeps working while you search live for something else', async (t) => {
+  const a = await signedInSocket(base, { firstName: 'Lale' });
+  const b = await signedInSocket(base, { firstName: 'Mete' });
+  t.after(() => { a.sock.close(); b.sock.close(); });
+  await call(a.sock, 'set-activity', { activity: 'concurrent test chess openings' });
+  await call(a.sock, 'bg-start', { hours: 3 });
+  // Now Lale searches live for something different; her chess search stays visible to Mete.
+  await call(a.sock, 'set-activity', { activity: 'concurrent test reading novels' });
+  const view = waitFor(b.sock, 'matches', (m) => m.away.some((x) => x.accountId === a.user.id));
+  await call(b.sock, 'set-activity', { activity: 'concurrent test chess openings' });
+  const card = (await view).away.find((x) => x.accountId === a.user.id);
+  assert.strictEqual(card.activity, 'concurrent test chess openings');
+  // She's online, so a request reaches her immediately.
+  const pinged = once(a.sock, 'connect-request');
+  await call(b.sock, 'connect-request', { accountId: a.user.id });
+  assert.strictEqual((await pinged).from.id, b.sock.id);
+  // If her live search becomes the same thing, only the live card is shown.
+  const merged = waitFor(b.sock, 'matches', (m) => m.matches.some((x) => x.id === a.sock.id) && !m.away.some((x) => x.accountId === a.user.id));
+  await call(a.sock, 'set-activity', { activity: 'concurrent test chess openings' });
+  await merged;
 });

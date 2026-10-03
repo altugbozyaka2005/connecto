@@ -32,6 +32,9 @@ const MAX_AWAY_MATCHES = 6;
 // Two background searches must be this similar before we tell them about each other.
 const BG_MATCH_SCORE = 0.35;
 const BG_NOTIFY_SCORE = 0.45;
+// A background search counts as "the same as" someone's live search above this similarity,
+// in which case only their live card is shown.
+const SAME_SEARCH_SCORE = 0.5;
 
 const app = express();
 // Set TRUST_PROXY=1 when running behind a load balancer so rate limits see real client IPs.
@@ -127,18 +130,24 @@ function matchesFor(user) {
   return results.slice(0, MAX_MATCHES);
 }
 
-// Accounts that are online and busy (searching live or in a call) aren't shown as "away".
-function liveAccounts() {
-  const out = new Set();
-  for (const u of users.values()) if (u.status !== 'idle') out.add(u.accountId);
+// accountId -> profiles of what they're searching for live right now.
+function liveSearches() {
+  const out = new Map();
+  for (const u of users.values()) {
+    if (u.status !== 'searching') continue;
+    if (!out.has(u.accountId)) out.set(u.accountId, []);
+    out.get(u.accountId).push(u.profile);
+  }
   return out;
 }
 
-// People with a background search who aren't here right now.
+// Background searches. Someone can search live for one thing ("reading") while their background
+// search looks for another ("chess"); it's only hidden when the live search is the same thing.
 function awayFor(user, live, rowCache) {
   const results = [];
   for (const bg of background.active()) {
-    if (bg.accountId === user.accountId || live.has(bg.accountId)) continue;
+    if (bg.accountId === user.accountId) continue;
+    if ((live.get(bg.accountId) || []).some((p) => score(p, bg.profile) >= SAME_SEARCH_SCORE)) continue;
     if (safety.isBlocked(user.accountId, bg.accountId)) continue;
     const s = score(user.profile, bg.profile) * AWAY_PENALTY;
     if (s < MIN_SCORE) continue;
@@ -201,7 +210,7 @@ function scheduleRecompute() {
     recomputeTimer = null;
     let searching = 0;
     for (const u of users.values()) if (u.status === 'searching') searching++;
-    const live = liveAccounts();
+    const live = liveSearches();
     const rowCache = new Map();
     for (const u of users.values()) {
       if (u.status !== 'searching') continue;
@@ -278,6 +287,9 @@ function personSummary(row, presence) {
 function inboxFor(accountId, presence, rowCache) {
   const mine = background.get(accountId);
   const me = cachedRow(rowCache, accountId);
+  // Anything after their last visit is flagged "new" (null = first visit: nothing is new).
+  const lastSeen = me?.last_seen_at || null;
+  const isNew = (t) => !!lastSeen && t > lastSeen;
   const incoming = [];
   const outgoing = [];
   const ready = [];
@@ -287,7 +299,7 @@ function inboxFor(accountId, presence, rowCache) {
     const other = cachedRow(rowCache, otherId);
     if (!other || other.banned_at || safety.isBlocked(accountId, otherId)) continue;
     involved.add(otherId);
-    const item = { id: r.id, person: personSummary(other, presence), activity: r.activity, at: r.updated_at };
+    const item = { id: r.id, person: personSummary(other, presence), activity: r.activity, at: r.updated_at, new: isNew(r.updated_at) };
     if (r.status === 'accepted') ready.push({ ...item, available: !!reachableSocket(otherId) });
     else if (r.to_id === accountId) incoming.push(item);
     else outgoing.push(item);
@@ -301,14 +313,25 @@ function inboxFor(accountId, presence, rowCache) {
       if (s < BG_MATCH_SCORE) continue;
       const row = cachedRow(rowCache, bg.accountId);
       if (!row || row.banned_at) continue;
-      matches.push({ person: personSummary(row, presence), activity: bg.activity, since: bg.createdAt, score: Math.round(s * 100) });
+      // Found when the second of the two searches started.
+      const foundAt = Math.max(mine.createdAt, bg.createdAt);
+      matches.push({ person: personSummary(row, presence), activity: bg.activity, since: bg.createdAt, foundAt, new: isNew(foundAt), score: Math.round(s * 100) });
     }
-    matches.sort((a, b) => b.score - a.score);
+    matches.sort((a, b) => b.foundAt - a.foundAt || b.score - a.score);
+  }
+  // People you actually talked to through a background request (last 7 days).
+  const history = [];
+  for (const r of background.history(accountId)) {
+    const otherId = r.from_id === accountId ? r.to_id : r.from_id;
+    const other = cachedRow(rowCache, otherId);
+    if (!other || other.banned_at || safety.isBlocked(accountId, otherId)) continue;
+    history.push({ person: personSummary(other, presence), activity: r.activity, at: r.updated_at, friend: friends.areFriends(accountId, otherId) });
   }
   return {
-    background: mine ? { activity: mine.activity, expiresAt: mine.expiresAt } : null,
+    background: mine ? { activity: mine.activity, startedAt: mine.createdAt, expiresAt: mine.expiresAt } : null,
     notifyEmail: !!me?.notify_email,
-    incoming, outgoing, ready, matches: matches.slice(0, 10),
+    lastSeen,
+    incoming, outgoing, ready, matches: matches.slice(0, 10), history,
   };
 }
 
@@ -564,7 +587,7 @@ function resolveTarget(u, { target, lastPeer } = {}) {
 function applyBlock(blockerAccountId, blockedAccountId) {
   safety.block(blockerAccountId, blockedAccountId);
   friends.remove(blockerAccountId, blockedAccountId);
-  background.settle(blockerAccountId, blockedAccountId);
+  background.forget(blockerAccountId, blockedAccountId);
   const mine = [...users.values()].filter((x) => x.accountId === blockerAccountId);
   const theirs = [...users.values()].filter((x) => x.accountId === blockedAccountId);
   for (const x of mine) {
@@ -1136,6 +1159,8 @@ io.on('connection', (socket) => {
     for (const inv of u.roomInvites.values()) clearTimeout(inv.timer);
     clearRequests(u);
     users.delete(socket.id);
+    // Last tab closed: remember when, so the next visit can show what's new.
+    if (!isOnline(u.accountId)) db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), u.accountId);
     scheduleRecompute();
   });
 });
