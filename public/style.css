@@ -325,6 +325,11 @@ p { margin: 0; }
 /* ---------- Friends ---------- */
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 .friends-btn { position: relative; padding: 8px 14px; }
+.bg-top-btn { position: relative; padding: 8px 14px; gap: 6px; }
+.bg-top-btn[data-on] { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--border)); }
+.bg-top-label { color: var(--text); }
+.bg-top-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: ping 1.8s infinite; }
+.bg-top-dot[hidden] { display: none; }
 .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 700; display: inline-grid; place-items: center; }
 .badge[hidden] { display: none; }
 .room-actions { display: flex; gap: 8px; align-items: center; }
@@ -601,7 +606,11 @@ a.menu-item[hidden] { display: none; }
   .stage[data-count="2"] .tiles { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
   .matches-tools { flex-direction: column; align-items: stretch; }
   .filter-tabs { grid-template-columns: repeat(3, 1fr); }
-  .friends-label { display: none; }
+  .friends-label, .bg-top-label { display: none; }
+  .topbar-actions { gap: 6px; }
+  .inbox-btn, .bg-top-btn, .friends-btn { padding: 8px 10px; }
+  .me-pill .me-name { display: none; }
+  .me-pill { padding: 4px 8px 4px 4px; gap: 4px; }
   .room-topbar { flex-wrap: wrap; }
   .me-pill span { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }

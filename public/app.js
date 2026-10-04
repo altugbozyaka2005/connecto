@@ -1423,6 +1423,12 @@
     $('#bg-entry-badge').textContent = urgent;
     $('#bg-entry-badge').hidden = !urgent;
 
+    // Top bar button: a green dot while any background search is running.
+    document.querySelectorAll('.bg-top-btn').forEach((b) => {
+      b.toggleAttribute('data-on', !!searches.length);
+      b.querySelector('.bg-top-dot').hidden = !searches.length;
+      b.title = searches.length ? `Background searches · ${searches.length} running` : 'Background searches';
+    });
     const btn = $('#bg-btn');
     btn.toggleAttribute('data-on', !!searches.length);
     $('#bg-btn-label').textContent = searches.length ? `Background searches (${searches.length})` : 'Search in background';
@@ -1470,7 +1476,7 @@
   $('#bg-entry').addEventListener('click', openBgPage);
   $('#bg-btn').addEventListener('click', () => (state.inbox.searches.length ? openBgPage() : openBgDialog()));
   $('#bg-empty-btn').addEventListener('click', () => openBgDialog());
-  document.querySelectorAll('.bg-menu-btn').forEach((b) => b.addEventListener('click', () => { closeMenus(); openBgPage(); }));
+  document.querySelectorAll('.bg-top-btn').forEach((b) => b.addEventListener('click', openBgPage));
   $('#bgp-new').addEventListener('click', () => {
     if (state.inbox.searches.length >= state.inbox.maxSearches) {
       return toast({ title: `You can run up to ${state.inbox.maxSearches} background searches`, body: 'Stop one to start another.' });
