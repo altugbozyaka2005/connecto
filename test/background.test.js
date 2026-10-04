@@ -65,7 +65,7 @@ test('background search: away card, request while offline, email, inbox, accept,
   const back = await reconnect(away.cookie);
   opened.push(back);
   const inbox = await waitFor(back, 'inbox', (p) => p.incoming.length === 2);
-  assert.strictEqual(inbox.background.activity, 'bg test learning the violin');
+  assert.strictEqual(inbox.searches[0].activity, 'bg test learning the violin');
   assert.ok(inbox.lastSeen, 'last visit recorded when her tab closed');
   assert.ok(inbox.incoming.every((r) => r.new), 'requests made while she was away are flagged new');
   const fromBaris = inbox.incoming.find((r) => r.person.id === live.user.id);
@@ -98,15 +98,19 @@ test('two background searches find each other', async (t) => {
   await call(a.sock, 'set-activity', { activity: 'bg pair test sourdough baking' });
   await call(a.sock, 'bg-start', { hours: 3 });
   await call(b.sock, 'set-activity', { activity: 'bg pair test baking sourdough bread' });
-  const seen = waitFor(b.sock, 'inbox', (p) => p.matches.some((m) => m.person.id === a.user.id));
+  const found = (p) => p.searches[0]?.matches.find((m) => m.person.id === a.user.id);
+  const seen = waitFor(b.sock, 'inbox', found);
   await call(b.sock, 'bg-start', { hours: 3 });
-  const m = (await seen).matches.find((x) => x.person.id === a.user.id);
+  const m = found(await seen);
   assert.strictEqual(m.activity, 'bg pair test sourdough baking');
-  // Asking each other = both want it.
+  assert.strictEqual(m.request, null);
+  // Asking each other = both want it; the match stays listed with its request state.
   assert.strictEqual((await call(b.sock, 'connect-request', { accountId: a.user.id })).status, 'pending');
+  await waitFor(b.sock, 'inbox', (p) => found(p)?.request === 'sent');
   assert.strictEqual((await call(a.sock, 'connect-request', { accountId: b.user.id })).status, 'accepted');
+  await waitFor(b.sock, 'inbox', (p) => found(p)?.request === 'ready');
   await call(a.sock, 'bg-stop');
-  await waitFor(a.sock, 'inbox', (p) => p.background === null);
+  await waitFor(a.sock, 'inbox', (p) => !p.searches.length);
 });
 
 // Two people become friends through a call.
@@ -163,8 +167,8 @@ test('a background search can be worded differently from the live search', async
   await call(a.sock, 'set-activity', { activity: 'bg wording test cooking' });
   const res = await call(a.sock, 'bg-start', { hours: 3, activity: 'Chess partner this weekend' });
   assert.strictEqual(res.activity, 'Chess partner this weekend');
-  const inbox = await waitFor(a.sock, 'inbox', (p) => p.background);
-  assert.strictEqual(inbox.background.activity, 'Chess partner this weekend');
+  const inbox = await waitFor(a.sock, 'inbox', (p) => p.searches.length);
+  assert.strictEqual(inbox.searches[0].activity, 'Chess partner this weekend');
 });
 
 test('a background search keeps working while you search live for something else', async (t) => {
@@ -187,4 +191,46 @@ test('a background search keeps working while you search live for something else
   const merged = waitFor(b.sock, 'matches', (m) => m.matches.some((x) => x.id === a.sock.id) && !m.away.some((x) => x.accountId === a.user.id));
   await call(a.sock, 'set-activity', { activity: 'concurrent test chess openings' });
   await merged;
+});
+
+test('several background searches at once, each with its own matches; edit and stop one', async (t) => {
+  const a = await signedInSocket(base, { firstName: 'Nil' });
+  const b = await signedInSocket(base, { firstName: 'Oya' });
+  const c = await signedInSocket(base, { firstName: 'Pelin' });
+  t.after(() => [a, b, c].forEach((x) => x.sock.close()));
+  const chess = await call(a.sock, 'bg-start', { hours: 24, activity: 'playing chess openings' });
+  const guitar = await call(a.sock, 'bg-start', { hours: 3, activity: 'practicing guitar chords' });
+  assert.notStrictEqual(chess.id, guitar.id);
+  // Starting the same wording again extends it instead of adding a duplicate.
+  assert.strictEqual((await call(a.sock, 'bg-start', { hours: 72, activity: 'playing chess openings' })).id, chess.id);
+  await call(a.sock, 'bg-start', { hours: 3, activity: 'multi test third thing' });
+  assert.ok((await call(a.sock, 'bg-start', { hours: 3, activity: 'multi test fourth thing' })).error, 'at most 3');
+
+  await call(b.sock, 'bg-start', { hours: 3, activity: 'chess openings blitz games' });
+  await call(c.sock, 'bg-start', { hours: 3, activity: 'strumming guitar chords' });
+  const of = (p, id) => p.searches.find((s) => s.id === id);
+  const inbox = await waitFor(a.sock, 'inbox', (p) => of(p, chess.id)?.matches.length && of(p, guitar.id)?.matches.length);
+  assert.strictEqual(inbox.searches.length, 3);
+  const ids = (id) => of(inbox, id).matches.map((m) => m.person.id);
+  assert.ok(ids(chess.id).includes(b.user.id) && !ids(chess.id).includes(c.user.id));
+  assert.ok(ids(guitar.id).includes(c.user.id) && !ids(guitar.id).includes(b.user.id));
+
+  // A request sent from the guitar search carries its wording.
+  const asked = once(c.sock, 'connect-request');
+  await call(a.sock, 'connect-request', { accountId: c.user.id, searchId: guitar.id });
+  assert.strictEqual((await asked).activity, 'practicing guitar chords');
+
+  // Someone live sees Nil once, with the closest of her searches.
+  const view = waitFor(b.sock, 'matches', (m) => m.away.some((x) => x.accountId === a.user.id));
+  await call(b.sock, 'set-activity', { activity: 'chess openings' });
+  const cards = (await view).away.filter((x) => x.accountId === a.user.id);
+  assert.strictEqual(cards.length, 1);
+  assert.strictEqual(cards[0].activity, 'playing chess openings');
+
+  // Edit one, then stop one: the others keep running.
+  await call(a.sock, 'bg-start', { id: guitar.id, hours: 12, activity: 'bass guitar lessons' });
+  await waitFor(a.sock, 'inbox', (p) => of(p, guitar.id)?.activity === 'bass guitar lessons');
+  await call(a.sock, 'bg-stop', { id: chess.id });
+  const left = await waitFor(a.sock, 'inbox', (p) => !of(p, chess.id));
+  assert.strictEqual(left.searches.length, 2);
 });

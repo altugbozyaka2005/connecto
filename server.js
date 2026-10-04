@@ -144,13 +144,18 @@ function liveSearches() {
 // Background searches. Someone can search live for one thing ("reading") while their background
 // search looks for another ("chess"); it's only hidden when the live search is the same thing.
 function awayFor(user, live, rowCache) {
-  const results = [];
+  // Someone with several background searches shows once, with the one closest to yours.
+  const best = new Map();
   for (const bg of background.active()) {
     if (bg.accountId === user.accountId) continue;
     if ((live.get(bg.accountId) || []).some((p) => score(p, bg.profile) >= SAME_SEARCH_SCORE)) continue;
-    if (safety.isBlocked(user.accountId, bg.accountId)) continue;
     const s = score(user.profile, bg.profile) * AWAY_PENALTY;
-    if (s < MIN_SCORE) continue;
+    if (s < MIN_SCORE || s <= (best.get(bg.accountId)?.s ?? 0)) continue;
+    best.set(bg.accountId, { bg, s });
+  }
+  const results = [];
+  for (const { bg, s } of best.values()) {
+    if (safety.isBlocked(user.accountId, bg.accountId)) continue;
     const row = cachedRow(rowCache, bg.accountId);
     if (!row || row.banned_at) continue;
     const req = background.between(user.accountId, bg.accountId);
@@ -285,7 +290,7 @@ function personSummary(row, presence) {
 }
 
 function inboxFor(accountId, presence, rowCache) {
-  const mine = background.get(accountId);
+  const mine = background.forUser(accountId);
   const me = cachedRow(rowCache, accountId);
   // Anything after their last visit is flagged "new" (null = first visit: nothing is new).
   const lastSeen = me?.last_seen_at || null;
@@ -293,32 +298,49 @@ function inboxFor(accountId, presence, rowCache) {
   const incoming = [];
   const outgoing = [];
   const ready = [];
-  const involved = new Set();
+  const requestWith = new Map(); // other accountId -> 'ready' | 'incoming' | 'sent'
   for (const r of background.forAccount(accountId)) {
     const otherId = r.from_id === accountId ? r.to_id : r.from_id;
     const other = cachedRow(rowCache, otherId);
     if (!other || other.banned_at || safety.isBlocked(accountId, otherId)) continue;
-    involved.add(otherId);
     const item = { id: r.id, person: personSummary(other, presence), activity: r.activity, at: r.updated_at, new: isNew(r.updated_at) };
-    if (r.status === 'accepted') ready.push({ ...item, available: !!reachableSocket(otherId) });
-    else if (r.to_id === accountId) incoming.push(item);
-    else outgoing.push(item);
+    if (r.status === 'accepted') {
+      ready.push({ ...item, available: !!reachableSocket(otherId) });
+      requestWith.set(otherId, { state: 'ready', id: r.id });
+    } else if (r.to_id === accountId) {
+      incoming.push(item);
+      requestWith.set(otherId, { state: 'incoming', id: r.id });
+    } else {
+      outgoing.push(item);
+      requestWith.set(otherId, { state: 'sent', id: r.id });
+    }
   }
-  // Other background searches like mine that I haven't talked to yet.
-  const matches = [];
-  if (mine) {
+  // Each of my searches with the other background searches like it (one entry per person).
+  const searches = mine.map((bgMine) => {
+    const best = new Map();
     for (const bg of background.active()) {
-      if (bg.accountId === accountId || involved.has(bg.accountId) || safety.isBlocked(accountId, bg.accountId)) continue;
-      const s = score(mine.profile, bg.profile);
-      if (s < BG_MATCH_SCORE) continue;
+      if (bg.accountId === accountId) continue;
+      const s = score(bgMine.profile, bg.profile);
+      if (s < BG_MATCH_SCORE || s <= (best.get(bg.accountId)?.s ?? 0)) continue;
+      best.set(bg.accountId, { bg, s });
+    }
+    const matches = [];
+    for (const { bg, s } of best.values()) {
+      if (safety.isBlocked(accountId, bg.accountId)) continue;
       const row = cachedRow(rowCache, bg.accountId);
       if (!row || row.banned_at) continue;
       // Found when the second of the two searches started.
-      const foundAt = Math.max(mine.createdAt, bg.createdAt);
-      matches.push({ person: personSummary(row, presence), activity: bg.activity, since: bg.createdAt, foundAt, new: isNew(foundAt), score: Math.round(s * 100) });
+      const foundAt = Math.max(bgMine.createdAt, bg.createdAt);
+      const req = requestWith.get(bg.accountId);
+      matches.push({
+        person: personSummary(row, presence), activity: bg.activity, since: bg.createdAt, foundAt, new: isNew(foundAt),
+        score: Math.round(s * 100), request: req?.state || null, requestId: req?.id || null,
+        available: req?.state === 'ready' && !!reachableSocket(bg.accountId),
+      });
     }
-    matches.sort((a, b) => b.foundAt - a.foundAt || b.score - a.score);
-  }
+    matches.sort((x, y) => y.foundAt - x.foundAt || y.score - x.score);
+    return { id: bgMine.id, activity: bgMine.activity, startedAt: bgMine.createdAt, expiresAt: bgMine.expiresAt, matches: matches.slice(0, 20) };
+  });
   // People you actually talked to through a background request (last 7 days).
   const history = [];
   for (const r of background.history(accountId)) {
@@ -328,10 +350,11 @@ function inboxFor(accountId, presence, rowCache) {
     history.push({ person: personSummary(other, presence), activity: r.activity, at: r.updated_at, friend: friends.areFriends(accountId, otherId) });
   }
   return {
-    background: mine ? { activity: mine.activity, startedAt: mine.createdAt, expiresAt: mine.expiresAt } : null,
+    searches,
+    maxSearches: background.MAX_SEARCHES,
     notifyEmail: !!me?.notify_email,
     lastSeen,
-    incoming, outgoing, ready, matches: matches.slice(0, 10), history,
+    incoming, outgoing, ready, history,
   };
 }
 
@@ -907,14 +930,16 @@ io.on('connection', (socket) => {
   // ---- Background search ----
 
   // `activity` (optional) can differ from the live search, e.g. "anyone for chess this weekend".
-  socket.on('bg-start', ({ hours, notify, activity } = {}, ack) => {
+  // `id` updates that search instead of starting another one.
+  socket.on('bg-start', ({ hours, notify, activity, id } = {}, ack) => {
     const u = me();
     if (!u) return;
     const wording = clean(activity, 140) || u.activity;
     if (!wording) return ack?.({ error: 'Tell us what you’re looking for.' });
     const h = Number(hours);
     if (!background.DURATIONS_H.includes(h)) return ack?.({ error: 'Choose how long to keep searching.' });
-    const mine = background.start(u.accountId, wording, h);
+    const mine = background.start(u.accountId, wording, h, id ? Number(id) : null);
+    if (mine.error) return ack?.({ error: mine.error });
     background.setNotify(u.accountId, notify !== false);
     // Tell people with a very similar background search who aren't here right now.
     for (const bg of background.active()) {
@@ -922,13 +947,14 @@ io.on('connection', (socket) => {
       if (score(mine.profile, bg.profile) >= BG_NOTIFY_SCORE) background.notify(bg.accountId, 'match', { name: u.name, activity: wording });
     }
     scheduleRecompute();
-    ack?.({ ok: true, expiresAt: mine.expiresAt, activity: wording });
+    ack?.({ ok: true, id: mine.id, expiresAt: mine.expiresAt, activity: wording });
   });
 
-  socket.on('bg-stop', (_p, ack) => {
+  // Stops search `id`, or all of them when no id is given.
+  socket.on('bg-stop', (p, ack) => {
     const u = me();
     if (!u) return;
-    background.stop(u.accountId);
+    background.stop(u.accountId, p?.id ? Number(p.id) : null);
     scheduleRecompute();
     ack?.({ ok: true });
   });
@@ -942,13 +968,16 @@ io.on('connection', (socket) => {
   });
 
   // Ask someone with a background search to connect. They see it when they're back.
-  socket.on('connect-request', ({ accountId } = {}, ack) => {
+  // `searchId`: sent from one of my background searches (its wording goes with the request).
+  socket.on('connect-request', ({ accountId, searchId } = {}, ack) => {
     const u = me();
     const targetId = Number(accountId);
     if (!u) return;
-    if (!background.get(targetId) && !background.between(u.accountId, targetId)) return ack?.({ error: 'They’re not searching anymore.' });
+    if (!background.has(targetId) && !background.between(u.accountId, targetId)) return ack?.({ error: 'They’re not searching anymore.' });
     if (safety.isBlocked(u.accountId, targetId)) return ack?.({ error: 'They’re not searching anymore.' });
-    const result = background.request(u.accountId, targetId, u.activity || background.get(u.accountId)?.activity);
+    const mine = background.forUser(u.accountId);
+    const from = mine.find((x) => x.id === Number(searchId));
+    const result = background.request(u.accountId, targetId, from?.activity || u.activity || mine[0]?.activity);
     if (result.error) return ack?.({ error: result.error });
     if (result.status === 'accepted') {
       // They had asked us first: both want it now.

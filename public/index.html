@@ -219,11 +219,17 @@
             <p class="form-error" id="activity-error" role="alert"></p>
           </form>
           <p class="or-group">or <button type="button" class="link-btn link-accent" id="start-group-from-prompt">start a group room</button> for this activity</p>
-          <p class="bg-chip" id="bg-chip" hidden>
-            <span class="bgp-dot" aria-hidden="true"></span>
-            <span id="bg-chip-text"></span>
-            <button type="button" class="link-btn link-accent" id="bg-chip-manage">Manage</button>
-          </p>
+          <button type="button" class="bg-entry" id="bg-entry">
+            <span class="bg-entry-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z"/></svg>
+            </span>
+            <span class="bg-entry-text">
+              <strong>Background searches</strong>
+              <span id="bg-entry-sub">Keep looking after you close the tab</span>
+            </span>
+            <span class="badge" id="bg-entry-badge" hidden></span>
+            <svg class="bg-entry-chev" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="m9 6 6 6-6 6-1.4-1.4L12.2 12 7.6 7.4z"/></svg>
+          </button>
           <div class="chips" id="suggestions" aria-label="Suggestions"></div>
         </div>
       </main>
@@ -312,6 +318,58 @@
           <button class="btn btn-primary" id="bg-empty-btn" type="button">Keep searching in the background</button>
           <p class="hint" id="bg-empty-hint">Close the tab and we'll keep looking. People can send you requests, and you'll see them when you're back.</p>
         </div>
+      </main>
+    </section>
+
+    <!-- 3b. Background searches -->
+    <section class="screen" id="screen-background">
+      <header class="topbar">
+        <button class="btn btn-ghost bgp-back" id="bgp-back" type="button">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg>
+          Back
+        </button>
+        <div class="brand-sm"><div class="logo logo-sm" aria-hidden="true"><span></span><span></span></div>Connecto</div>
+      </header>
+      <main class="bgp-main">
+        <div class="bgp-hero">
+          <div>
+            <h2>Background searches</h2>
+            <p>They keep running after you close Connecto, alongside whatever you search live. Tap one to see its matches.</p>
+          </div>
+          <button class="btn btn-primary" id="bgp-new" type="button">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
+            New background search
+          </button>
+        </div>
+        <p class="bgp-summary" id="bgp-summary" hidden></p>
+
+        <section class="inbox-section" id="inbox-ready-section" hidden>
+          <p class="eyebrow">Ready to connect · you both said yes</p>
+          <ul class="people-list" id="inbox-ready"></ul>
+        </section>
+        <section class="inbox-section" id="inbox-incoming-section" hidden>
+          <p class="eyebrow">Want to connect with you</p>
+          <ul class="people-list" id="inbox-incoming"></ul>
+        </section>
+
+        <div class="bgs-list" id="bgs-list"></div>
+        <div class="bgp-empty" id="bgp-empty" hidden>
+          <h3>No background searches yet</h3>
+          <p>Start one, for example “playing chess”, and close the tab. People who want the same thing can find you and send a request, and you'll see it here when you're back.</p>
+        </div>
+
+        <section class="inbox-section" id="inbox-outgoing-section" hidden>
+          <p class="eyebrow">Waiting for a reply</p>
+          <ul class="people-list" id="inbox-outgoing"></ul>
+        </section>
+        <section class="inbox-section" id="inbox-history-section" hidden>
+          <p class="eyebrow">Recently connected</p>
+          <ul class="people-list" id="inbox-history"></ul>
+        </section>
+        <label class="check bgp-notify">
+          <input type="checkbox" id="bgp-notify" />
+          <span>Email me when someone wants to connect (at most one every few hours)</span>
+        </label>
       </main>
     </section>
 
@@ -605,7 +663,7 @@
 
   <!-- Background search -->
   <dialog class="dialog dialog-sm" id="bg-dialog" aria-labelledby="bg-title">
-    <h3 id="bg-title">Search in the background</h3>
+    <h3 id="bg-title">New background search</h3>
     <p class="form-intro">We'll keep searching after you close Connecto. People searching live will see you under <strong>Searching in the background</strong> and can send you a request. You'll also see others searching in the background for something similar.</p>
     <label class="field">
       <span>What are you looking for?</span>
@@ -630,55 +688,6 @@
       <button type="button" class="btn btn-ghost" id="bg-stop" hidden>Stop searching</button>
       <button type="button" class="btn btn-ghost" data-close>Cancel</button>
       <button type="button" class="btn btn-primary" id="bg-go">Start</button>
-    </div>
-  </dialog>
-
-  <!-- Background search page (status, matches found, requests, history) -->
-  <dialog class="dialog dialog-wide" id="inbox-dialog" aria-labelledby="inbox-title">
-    <h3 id="inbox-title">Background search</h3>
-    <div class="bgp-status" id="bgp-status">
-      <div class="bgp-head">
-        <span class="bgp-dot" aria-hidden="true"></span>
-        <div>
-          <strong id="bgp-title"></strong>
-          <p id="bgp-detail"></p>
-        </div>
-      </div>
-      <div class="bgp-actions">
-        <button type="button" class="btn btn-primary" id="bgp-start">Start a background search</button>
-        <button type="button" class="btn btn-ghost" id="bgp-edit">Edit</button>
-        <button type="button" class="btn btn-ghost bgp-stop" id="bgp-stop">Stop</button>
-      </div>
-      <label class="check bgp-notify">
-        <input type="checkbox" id="bgp-notify" />
-        <span>Email me when someone wants to connect (at most one every few hours)</span>
-      </label>
-    </div>
-    <p class="bgp-summary" id="bgp-summary" hidden></p>
-
-    <section class="inbox-section" id="inbox-ready-section" hidden>
-      <p class="eyebrow">Ready to connect · you both said yes</p>
-      <ul class="people-list" id="inbox-ready"></ul>
-    </section>
-    <section class="inbox-section" id="inbox-incoming-section" hidden>
-      <p class="eyebrow">Want to connect with you</p>
-      <ul class="people-list" id="inbox-incoming"></ul>
-    </section>
-    <section class="inbox-section" id="inbox-matches-section" hidden>
-      <p class="eyebrow">Matches found · also searching in the background</p>
-      <ul class="people-list" id="inbox-matches"></ul>
-    </section>
-    <section class="inbox-section" id="inbox-outgoing-section" hidden>
-      <p class="eyebrow">Waiting for a reply</p>
-      <ul class="people-list" id="inbox-outgoing"></ul>
-    </section>
-    <section class="inbox-section" id="inbox-history-section" hidden>
-      <p class="eyebrow">Recently connected</p>
-      <ul class="people-list" id="inbox-history"></ul>
-    </section>
-    <p class="form-intro" id="inbox-empty" hidden>No matches or requests yet. While your background search is on, people who match it show up here, even after you close the tab.</p>
-    <div class="dialog-actions">
-      <button type="button" class="btn btn-ghost" data-close>Close</button>
     </div>
   </dialog>
 

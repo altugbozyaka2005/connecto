@@ -86,9 +86,10 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS friend_requests_to ON friend_requests(to_id);
 
-  -- A search that keeps running after you close the tab (one per person).
+  -- Searches that keep running after you close the tab (a few per person).
   CREATE TABLE IF NOT EXISTS background_searches (
-    user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     activity   TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
@@ -148,5 +149,26 @@ if (!crSql.includes("'done'")) {
     COMMIT;
   `);
 }
+
+// background_searches used to allow one search per person (user_id was the key).
+const bgColumns = new Set(db.prepare('PRAGMA table_info(background_searches)').all().map((c) => c.name));
+if (!bgColumns.has('id')) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE background_searches RENAME TO background_searches_old;
+    CREATE TABLE background_searches (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      activity   TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    INSERT INTO background_searches (user_id, activity, created_at, expires_at)
+      SELECT user_id, activity, created_at, expires_at FROM background_searches_old;
+    DROP TABLE background_searches_old;
+    COMMIT;
+  `);
+}
+db.exec('CREATE INDEX IF NOT EXISTS background_searches_user ON background_searches(user_id)');
 
 module.exports = db;

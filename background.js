@@ -10,15 +10,17 @@ const HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000; // "recently connected" shows a 
 const MAX_REQUESTS_PER_DAY = 20;
 const EMAIL_EVERY_MS = 3 * 60 * 60 * 1000; // at most one notification email per 3 hours
 
-// accountId -> { accountId, activity, profile, createdAt, expiresAt }
+const MAX_SEARCHES = 3; // background searches per person at once
+
+// searchId -> { id, accountId, activity, profile, createdAt, expiresAt }
 const searches = new Map();
 function load() {
   searches.clear();
   const rows = db.prepare(`SELECT b.* FROM background_searches b JOIN users u ON u.id = b.user_id
                            WHERE b.expires_at > ? AND u.banned_at IS NULL`).all(Date.now());
-  for (const r of rows) searches.set(r.user_id, toEntry(r));
+  for (const r of rows) searches.set(r.id, toEntry(r));
 }
-const toEntry = (r) => ({ accountId: r.user_id, activity: r.activity, profile: analyze(r.activity), createdAt: r.created_at, expiresAt: r.expires_at });
+const toEntry = (r) => ({ id: r.id, accountId: r.user_id, activity: r.activity, profile: analyze(r.activity), createdAt: r.created_at, expiresAt: r.expires_at });
 load();
 
 // Expired searches and stale requests are cleared every few minutes.
@@ -36,25 +38,45 @@ function active() {
   return [...searches.values()].filter((s) => s.expiresAt > now);
 }
 
-function get(accountId) {
-  const s = searches.get(accountId);
-  return s && s.expiresAt > Date.now() ? s : null;
+// One person's running searches, newest first.
+function forUser(accountId) {
+  return active().filter((s) => s.accountId === accountId).sort((a, b) => b.createdAt - a.createdAt);
 }
 
-function start(accountId, activity, hours) {
+const has = (accountId) => forUser(accountId).length > 0;
+
+// Starts a new search, or updates search `id` (wording and duration). Returns the entry or { error }.
+function start(accountId, activity, hours, id = null) {
   const now = Date.now();
   const expiresAt = now + hours * 60 * 60 * 1000;
-  db.prepare(`INSERT INTO background_searches (user_id, activity, created_at, expires_at) VALUES (?, ?, ?, ?)
-              ON CONFLICT(user_id) DO UPDATE SET activity = excluded.activity, created_at = excluded.created_at, expires_at = excluded.expires_at`)
+  const mine = forUser(accountId);
+  const existing = id ? mine.find((s) => s.id === id)
+    // Starting the same search again just extends it.
+    : mine.find((s) => s.activity.toLowerCase() === activity.toLowerCase());
+  if (id && !existing) return { error: 'That background search has ended.' };
+  if (existing) {
+    db.prepare('UPDATE background_searches SET activity = ?, created_at = ?, expires_at = ? WHERE id = ?').run(activity, now, expiresAt, existing.id);
+    const entry = toEntry({ id: existing.id, user_id: accountId, activity, created_at: now, expires_at: expiresAt });
+    searches.set(entry.id, entry);
+    return entry;
+  }
+  if (mine.length >= MAX_SEARCHES) return { error: `You can run up to ${MAX_SEARCHES} background searches. Stop one first.` };
+  const { lastInsertRowid } = db.prepare('INSERT INTO background_searches (user_id, activity, created_at, expires_at) VALUES (?, ?, ?, ?)')
     .run(accountId, activity, now, expiresAt);
-  const entry = toEntry({ user_id: accountId, activity, created_at: now, expires_at: expiresAt });
-  searches.set(accountId, entry);
+  const entry = toEntry({ id: Number(lastInsertRowid), user_id: accountId, activity, created_at: now, expires_at: expiresAt });
+  searches.set(entry.id, entry);
   return entry;
 }
 
-function stop(accountId) {
+// Stops one search, or all of them when no id is given.
+function stop(accountId, id = null) {
+  if (id) {
+    db.prepare('DELETE FROM background_searches WHERE id = ? AND user_id = ?').run(id, accountId);
+    if (searches.get(id)?.accountId === accountId) searches.delete(id);
+    return;
+  }
   db.prepare('DELETE FROM background_searches WHERE user_id = ?').run(accountId);
-  searches.delete(accountId);
+  for (const s of forUser(accountId)) searches.delete(s.id);
 }
 
 // ---------- Requests ----------
@@ -146,5 +168,5 @@ function setNotify(accountId, on) {
 }
 
 module.exports = {
-  DURATIONS_H, active, get, start, stop, request, respond, cancel, connected, settle, forget, history, between, forAccount, notify, setNotify,
+  DURATIONS_H, MAX_SEARCHES, active, forUser, has, start, stop, request, respond, cancel, connected, settle, forget, history, between, forAccount, notify, setNotify,
 };
