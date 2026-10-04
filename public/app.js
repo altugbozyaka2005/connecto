@@ -1547,6 +1547,49 @@
     else toast({ title: `You and ${person.name} both want to connect 🎉`, body: person.status === 'offline' ? 'We’ll let them know. Call when you’re both online.' : 'They’re online now. Tap Call now.' });
   }
 
+  // A background match, drawn like a live match card; the card's action depends on the request state.
+  function bgMatchCard(m, search) {
+    const p = m.person;
+    const card = personCard({ ...p, activity: m.activity, score: m.score, interests: p.interests || [] });
+    card.classList.add('bg-match');
+    const av = card.querySelector('.avatar');
+    av.classList.add('presence');
+    av.dataset.status = p.status;
+    if (m.new) card.querySelector('.match-name').append(newTag());
+    card.querySelector('.match-meta').textContent = [statusLine(p), `found ${ago(m.foundAt)}`, metaLine(p)].filter(Boolean).join(' · ');
+    card.querySelector('.card-more').hidden = true;
+    const cta = card.querySelector('.match-cta');
+    delete card.dataset.state;
+    let action = null;
+    if (m.request === 'ready') {
+      card.dataset.state = 'requested-you';
+      const canCall = m.available && !state.room;
+      cta.textContent = canCall ? 'You both said yes · call now →' : 'You both said yes · call when they’re online';
+      if (canCall) action = () => callBack(p);
+    } else if (m.request === 'incoming') {
+      card.dataset.state = 'requested-you';
+      cta.textContent = 'Wants to connect · accept →';
+      action = () => acceptConnect(m.requestId, p);
+    } else if (m.request === 'sent') {
+      card.dataset.state = 'requested';
+      cta.textContent = 'Request sent ✓';
+    } else {
+      cta.textContent = p.status === 'offline' ? 'Send request · they’ll see it later' : 'Send request →';
+      action = async () => {
+        cta.textContent = 'Sending…';
+        const res = await emit('connect-request', { accountId: p.id, searchId: search.id });
+        if (res.error) toast({ title: 'Couldn’t send request', body: res.error });
+      };
+    }
+    const hit = card.querySelector('.match-hit');
+    const fresh = hit.cloneNode(false); // drop the live-match click handler
+    hit.replaceWith(fresh);
+    fresh.setAttribute('aria-label', `${cta.textContent}: ${p.name}, ${m.activity}`);
+    if (action) fresh.addEventListener('click', action);
+    else card.dataset.inert = '';
+    return card;
+  }
+
   // One background search: a header you tap to show or hide its matches.
   function searchCard(search) {
     const card = document.createElement('article');
@@ -1589,30 +1632,10 @@
     const body = document.createElement('div');
     body.className = 'bgs-body';
     if (search.matches.length) {
-      const list = document.createElement('ul');
-      list.className = 'people-list';
-      for (const m of search.matches) {
-        const li = inboxRow(m.person, `“${m.activity}” · ${m.score}% match · found ${ago(m.foundAt)} · ${statusLine(m.person)}`, m.new);
-        if (m.request === 'ready') {
-          const b = button(m.available ? 'Call now' : 'Accepted · not online', 'btn btn-primary', () => callBack(m.person));
-          b.disabled = !m.available || !!state.room;
-          li.append(b);
-        } else if (m.request === 'incoming') {
-          li.append(button('Accept', 'btn btn-good', () => acceptConnect(m.requestId, m.person)));
-        } else if (m.request === 'sent') {
-          const b = button('Request sent', 'btn btn-ghost', null);
-          b.disabled = true;
-          li.append(b);
-        } else {
-          li.append(button('Send request', 'btn btn-primary', async (e) => {
-            e.currentTarget.disabled = true;
-            const res = await emit('connect-request', { accountId: m.person.id, searchId: search.id });
-            if (res.error) toast({ title: 'Couldn’t send request', body: res.error });
-          }));
-        }
-        list.append(li);
-      }
-      body.append(list);
+      const grid = document.createElement('div');
+      grid.className = 'grid bgs-grid';
+      for (const m of search.matches) grid.append(bgMatchCard(m, search));
+      body.append(grid);
     } else {
       const p = document.createElement('p');
       p.className = 'bgs-none';

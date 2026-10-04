@@ -254,6 +254,7 @@ p { margin: 0; }
   position: absolute; top: 10px; right: 10px; z-index: 2; width: 34px; height: 34px; border-radius: 50%;
   display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); cursor: pointer; transition: background .15s, color .15s;
 }
+.card-more[hidden] { display: none; }
 .card-more:hover, .card-more[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
 .popover { position: fixed; top: 0; left: 0; right: auto; min-width: 160px; }
 .popover[hidden] { display: none; }
@@ -425,7 +426,13 @@ p { margin: 0; }
 .bgs[data-open] .bgs-chev { transform: rotate(180deg); }
 .bgs-body { display: none; padding: 0 20px 16px; border-top: 1px solid var(--border); }
 .bgs[data-open] .bgs-body { display: block; }
-.bgs-body .people-list { margin-top: 14px; }
+.bgs-grid { margin-top: 16px; }
+/* Opened, a search widens to the matches page's width (the page itself stays narrow). */
+.bgs[data-open] { --wide: min(1100px - 48px, 100vw - 64px); width: var(--wide); margin-left: calc((100% - var(--wide)) / 2); }
+.bg-match[data-inert] { cursor: default; }
+.bg-match[data-inert] .match-hit { cursor: default; }
+.bg-match[data-inert]:hover { transform: none; box-shadow: var(--shadow); }
+.bg-match .new-tag { margin-left: 4px; }
 .bgs-none { margin-top: 14px; color: var(--muted); font-size: 14px; line-height: 1.5; }
 .bgs-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .bgs-foot span { flex: 1; min-width: 160px; font-size: 13px; color: var(--muted); }
@@ -592,6 +599,7 @@ a.menu-item[hidden] { display: none; }
   .bgp-main { padding: 20px 16px 48px; }
   .bgs-head { padding: 14px 14px; gap: 10px; }
   .bgs-body { padding: 0 14px 14px; }
+  .bgs[data-open] { width: auto; margin-left: 0; }
   .bgs-title strong { font-size: 17px; }
   .bgs-head .bgp-dot { display: none; }
   .status-card { flex-direction: column; align-items: flex-start; }
