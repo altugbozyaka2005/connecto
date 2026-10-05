@@ -1,5 +1,7 @@
 // Shared helpers: boots the server on a random port with an in-memory database.
 process.env.DB_PATH = ':memory:';
+// Socket tests use word matching only (fast, no model); test/semantic.test.js covers the model.
+process.env.EMBEDDINGS = 'off';
 process.env.AUTH_RATE_LIMIT = '1000';
 process.env.MAIL_TRANSPORT = 'memory';
 process.env.TURN_SECRET = 'test-turn-secret';

@@ -120,7 +120,25 @@ function analyze(text) {
   };
 }
 
+// Meaning similarity from embeddings (see embeddings.js), mapped onto the 0-1 score scale.
+// For this model, unrelated activities sit below ~0.25 cosine and paraphrases above ~0.75.
+const SEMANTIC_LOW = 0.25;
+const SEMANTIC_HIGH = 0.75;
+
+function semantic(a, b) {
+  if (!a.vec || !b.vec) return 0;
+  let dot = 0;
+  for (let i = 0; i < a.vec.length; i++) dot += a.vec[i] * b.vec[i];
+  return Math.max(0, Math.min(1, (dot - SEMANTIC_LOW) / (SEMANTIC_HIGH - SEMANTIC_LOW)));
+}
+
+// The better of word overlap and meaning: words catch exact phrases and typos, meaning catches
+// synonyms, slang and other languages.
 function score(a, b) {
+  return Math.max(lexical(a, b), semantic(a, b));
+}
+
+function lexical(a, b) {
   const cat = jaccard(a.categories, b.categories);
   const kw = cosine(a.stems, b.stems);
   const fuzzy = jaccard(a.grams, b.grams);
@@ -132,4 +150,4 @@ function score(a, b) {
   return Math.min(1, s);
 }
 
-module.exports = { analyze, score, tokenize, stem };
+module.exports = { analyze, score, lexical, semantic, tokenize, stem };

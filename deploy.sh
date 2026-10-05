@@ -7,7 +7,7 @@ DIR=/docker/connecto
 
 npm test
 rsync -az --delete \
-  --exclude node_modules --exclude data --exclude test --exclude .git --exclude .DS_Store --exclude .env \
+  --exclude node_modules --exclude data --exclude test --exclude .git --exclude .DS_Store --exclude .env --exclude models \
   ./ "$HOST:$DIR/"
 # First deploy only: create the server-side .env with a random TURN secret.
 ssh "$HOST" "cd $DIR && [ -f .env ] || (umask 077; echo TURN_SECRET=\$(openssl rand -hex 32) > .env)"

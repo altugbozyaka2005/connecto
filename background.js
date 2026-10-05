@@ -2,6 +2,7 @@
 const db = require('./db');
 const mail = require('./mail');
 const { analyze } = require('./matcher');
+const embeddings = require('./embeddings');
 
 const DURATIONS_H = [3, 12, 24, 72];
 const PENDING_TTL_MS = 7 * 24 * 60 * 60 * 1000; // unanswered requests disappear after a week
@@ -25,7 +26,14 @@ function load() {
                            WHERE b.expires_at > ? AND u.banned_at IS NULL`).all(Date.now());
   for (const r of rows) searches.set(r.id, toEntry(r));
 }
-const toEntry = (r) => ({ id: r.id, accountId: r.user_id, activity: r.activity, profile: analyze(r.activity), createdAt: r.created_at, expiresAt: r.expires_at });
+// The meaning vector is added when the model has it (see embeddings.js); `ready` waits for that.
+const vectors = new WeakMap(); // entry -> Promise
+function toEntry(r) {
+  const entry = { id: r.id, accountId: r.user_id, activity: r.activity, profile: analyze(r.activity), createdAt: r.created_at, expiresAt: r.expires_at };
+  vectors.set(entry, embeddings.attach(entry.profile, r.activity));
+  return entry;
+}
+const ready = (entry) => vectors.get(entry) || Promise.resolve(false);
 load();
 
 // Expired searches and stale requests are cleared every few minutes.
@@ -236,6 +244,6 @@ function setNotify(accountId, on) {
 }
 
 module.exports = {
-  DURATIONS_H, MAX_SEARCHES, active, forUser, has, start, stop, request, respond, cancel, connected, settle, forget, history, between, forAccount, notify, setNotify,
+  DURATIONS_H, MAX_SEARCHES, active, forUser, has, start, stop, ready, request, respond, cancel, connected, settle, forget, history, between, forAccount, notify, setNotify,
   propose, pick, unschedule, dueReminders, talkedRecently, MAX_SLOTS,
 };

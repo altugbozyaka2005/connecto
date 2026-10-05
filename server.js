@@ -4,6 +4,15 @@ const crypto = require('crypto');
 const express = require('express');
 const { Server } = require('socket.io');
 const { analyze, score } = require('./matcher');
+const embeddings = require('./embeddings');
+
+// A matcher profile for some text. Word-based scoring works right away; the meaning vector
+// arrives a moment later (a few ms once the model is loaded) and triggers a fresh match pass.
+function profileOf(text) {
+  const profile = analyze(text);
+  embeddings.attach(profile, text).then((ok) => ok && scheduleRecompute());
+  return profile;
+}
 const db = require('./db');
 const { createAuthRouter, socketAuth, displayName, profileExtras } = require('./auth');
 const { iceServersFor } = require('./turn');
@@ -457,7 +466,7 @@ function newRoom({ capacity = 2, open = false, hostId = null, activity = '' } = 
     capacity,
     open,
     activity,
-    profile: analyze(activity),
+    profile: profileOf(activity),
     // The server relays every chat message, so it keeps them while the room lasts; they're only
     // ever stored if someone files a report from this call.
     chat: [],
@@ -699,7 +708,7 @@ io.on('connection', (socket) => {
     const activity = clean(payload.activity, 140);
     if (!activity) return ack?.({ error: 'Tell us what you are doing.' });
     u.activity = activity;
-    u.profile = analyze(activity);
+    u.profile = profileOf(activity);
     u.status = 'searching';
     // Requests were made against the old activity; drop them.
     clearRequests(u);
@@ -957,12 +966,15 @@ io.on('connection', (socket) => {
     const mine = background.start(u.accountId, wording, h, id ? Number(id) : null);
     if (mine.error) return ack?.({ error: mine.error });
     background.setNotify(u.accountId, notify !== false);
-    // Tell people with a very similar background search who aren't here right now.
-    for (const bg of background.active()) {
-      if (bg.accountId === u.accountId || isOnline(bg.accountId) || safety.isBlocked(u.accountId, bg.accountId)) continue;
-      if (score(mine.profile, bg.profile) >= BG_NOTIFY_SCORE) background.notify(bg.accountId, 'match', { name: u.name, activity: wording });
-    }
     scheduleRecompute();
+    // Once its meaning vector is ready: email people with a very similar background search who aren't here.
+    background.ready(mine).then(() => {
+      for (const bg of background.active()) {
+        if (bg.accountId === u.accountId || isOnline(bg.accountId) || safety.isBlocked(u.accountId, bg.accountId)) continue;
+        if (score(mine.profile, bg.profile) >= BG_NOTIFY_SCORE) background.notify(bg.accountId, 'match', { name: u.name, activity: wording });
+      }
+      scheduleRecompute();
+    });
     ack?.({ ok: true, id: mine.id, expiresAt: mine.expiresAt, activity: wording });
   });
 
@@ -1125,7 +1137,7 @@ io.on('connection', (socket) => {
     const wording = clean(activity, 140);
     if (wording && wording !== u.activity) {
       u.activity = wording;
-      u.profile = analyze(wording);
+      u.profile = profileOf(wording);
     }
     if (!u.activity) return ack?.({ error: 'Tell us what the room is for.' });
     u.status = 'searching';
@@ -1153,7 +1165,7 @@ io.on('connection', (socket) => {
     if (room.open && !wasOpen) {
       // The room is matched on the host's activity (or anyone's, if the host has none).
       room.activity = u.activity || room.members.map((id) => users.get(id)?.activity).find(Boolean) || 'Hanging out';
-      room.profile = analyze(room.activity);
+      room.profile = profileOf(room.activity);
       for (const id of room.members) io.to(id).emit('room-notice', { text: `${u.name} opened the call to others (up to ${cap} people).` });
     } else if (!room.open && wasOpen) {
       for (const id of room.members) io.to(id).emit('room-notice', { text: `${u.name} closed the call to new people.` });
@@ -1269,6 +1281,8 @@ setInterval(sendMeetingReminders, 30 * 1000).unref();
 
 if (require.main === module) {
   server.listen(PORT, () => console.log(`Connecto running at http://localhost:${PORT}`));
+  // Load the model now rather than on the first search.
+  embeddings.load();
 
   // Deploys send SIGTERM: stop accepting work, then close the database cleanly.
   const shutdown = (signal) => {

@@ -43,7 +43,7 @@ services:
       resources:
         limits:
           cpus: "1.5"
-          memory: 1g
+          memory: 2g # includes ~0.9 GB for the matching model (embeddings.js)
     logging:
       driver: json-file
       options:
