@@ -159,6 +159,21 @@ function openConnection(id, accountId) {
   return r && live(r) ? r : null;
 }
 
+// An open, accepted request between two connected people (opened for planning a meeting when
+// they have none, e.g. weeks after they first talked). A pending one between them is accepted.
+function reopen(a, b, activity) {
+  const existing = between(a, b);
+  const now = Date.now();
+  if (existing?.status === 'accepted') return existing;
+  if (existing) {
+    db.prepare("UPDATE connect_requests SET status = 'accepted', updated_at = ? WHERE id = ?").run(now, existing.id);
+    return { ...existing, status: 'accepted' };
+  }
+  const { lastInsertRowid } = db.prepare("INSERT INTO connect_requests (from_id, to_id, activity, status, created_at, updated_at) VALUES (?, ?, ?, 'accepted', ?, ?)")
+    .run(a, b, activity || '', now, now);
+  return db.prepare('SELECT * FROM connect_requests WHERE id = ?').get(lastInsertRowid);
+}
+
 // Propose 1-3 times (ms) to meet. Replaces any earlier proposal or meeting. Returns the row or { error }.
 function propose(id, accountId, slots) {
   const r = openConnection(id, accountId);
@@ -245,5 +260,5 @@ function setNotify(accountId, on) {
 
 module.exports = {
   DURATIONS_H, MAX_SEARCHES, active, forUser, has, start, stop, ready, request, respond, cancel, connected, settle, forget, history, between, forAccount, notify, setNotify,
-  propose, pick, unschedule, dueReminders, talkedRecently, MAX_SLOTS,
+  propose, pick, unschedule, reopen, dueReminders, talkedRecently, MAX_SLOTS,
 };

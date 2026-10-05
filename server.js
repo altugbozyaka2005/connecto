@@ -5,6 +5,7 @@ const express = require('express');
 const { Server } = require('socket.io');
 const { analyze, score } = require('./matcher');
 const embeddings = require('./embeddings');
+const chat = require('./chat');
 
 // A matcher profile for some text. Word-based scoring works right away; the meaning vector
 // arrives a moment later (a few ms once the model is loaded) and triggers a fresh match pass.
@@ -295,6 +296,7 @@ function personSummary(row, presence) {
   return {
     id: row.id, name: displayName(row), avatar: row.avatar, ...profileExtras(row),
     status: p ? STATUS_LABEL[p.status] : 'offline',
+    doing: p && p.status !== 'idle' ? p.activity : '',
   };
 }
 
@@ -369,6 +371,25 @@ function inboxFor(accountId, presence, rowCache) {
       friend: friends.areFriends(accountId, otherId), available: !!reachableSocket(otherId),
     });
   }
+  // Direct messages: everyone you're connected with or friends with, most recent conversation first.
+  const sums = chat.summaries(accountId);
+  connects.people = [];
+  for (const id of chat.contacts(accountId)) {
+    const row = cachedRow(rowCache, id);
+    if (!row || row.banned_at) continue;
+    const sum = sums.get(id);
+    const since = chat.connectedSince(accountId, id);
+    connects.people.push({
+      person: personSummary(row, presence),
+      friend: friends.areFriends(accountId, id),
+      available: !!reachableSocket(id),
+      last: sum?.last || null,
+      unread: sum?.unread || 0,
+      since,
+      at: sum?.last.at || since || 0,
+    });
+  }
+  connects.people.sort((a, b) => b.at - a.at);
   return {
     searches,
     maxSearches: background.MAX_SEARCHES,
@@ -396,7 +417,7 @@ function pushInboxes(rowCache = new Map()) {
 const isOnline = (accountId) => [...users.values()].some((u) => u.accountId === accountId);
 
 // Friends, or two people who both said yes to connecting: they can call each other directly.
-const trusted = (a, b) => friends.areFriends(a, b) || background.connected(a, b);
+const trusted = (a, b) => friends.areFriends(a, b) || chat.isConnected(a, b) || background.connected(a, b);
 
 // A tab that can take a friend's call invite right now (connected, not in a call).
 function reachableSocket(accountId) {
@@ -612,11 +633,22 @@ function settleRequests(room) {
 
 // Who a report/block is about: the person from your current or most recent call
 // ({ lastPeer: true }), or someone on your match list ({ target: socketId }).
-function resolveTarget(u, { target, lastPeer } = {}) {
+function resolveTarget(u, { target, lastPeer, accountId } = {}) {
   if (lastPeer) {
     const p = u.lastPeer;
     if (!p || (!u.roomId && Date.now() - p.at > LAST_PEER_TTL_MS)) return null;
     return { accountId: p.accountId, context: 'call', activity: p.activity, transcript: p.chat };
+  }
+  if (accountId) {
+    // From Connects: someone you're connected with, friends with, or have a request with.
+    const id = Number(accountId);
+    if (id === u.accountId || !(chat.isConnected(u.accountId, id) || friends.areFriends(u.accountId, id) || background.between(u.accountId, id))) return null;
+    const names = new Map([[u.accountId, u.name]]);
+    const row = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    if (!row) return null;
+    names.set(id, displayName(row));
+    const transcript = chat.transcript(u.accountId, id).map((m) => ({ name: names.get(m.from_id), text: m.body, at: m.created_at }));
+    return { accountId: id, context: 'chat', activity: null, transcript };
   }
   const t = users.get(target);
   if (!t || t.accountId === u.accountId) return null;
@@ -632,6 +664,7 @@ function applyBlock(blockerAccountId, blockedAccountId) {
   safety.block(blockerAccountId, blockedAccountId);
   friends.remove(blockerAccountId, blockedAccountId);
   background.forget(blockerAccountId, blockedAccountId);
+  chat.disconnect(blockerAccountId, blockedAccountId);
   const mine = [...users.values()].filter((x) => x.accountId === blockerAccountId);
   const theirs = [...users.values()].filter((x) => x.accountId === blockedAccountId);
   for (const x of mine) {
@@ -828,7 +861,7 @@ io.on('connection', (socket) => {
     } else if (payload?.accountId) {
       // From Connects: someone you talked to through a background connection this week.
       const id = Number(payload.accountId);
-      if (background.talkedRecently(u.accountId, id)) p = { accountId: id };
+      if (chat.isConnected(u.accountId, id) || background.talkedRecently(u.accountId, id)) p = { accountId: id };
     } else if (u.lastPeer && (u.roomId || Date.now() - u.lastPeer.at <= LAST_PEER_TTL_MS)) {
       p = u.lastPeer;
     }
@@ -1012,6 +1045,7 @@ io.on('connection', (socket) => {
     if (result.error) return ack?.({ error: result.error });
     if (result.status === 'accepted') {
       // They had asked us first: both want it now.
+      chat.connect(u.accountId, targetId);
       if (isOnline(targetId)) io.to(`account:${targetId}`).emit('connect-accepted', { accountId: u.accountId, name: u.name });
       else background.notify(targetId, 'accepted', { name: u.name });
     } else if (isOnline(targetId)) {
@@ -1029,6 +1063,7 @@ io.on('connection', (socket) => {
     const r = background.respond(Number(id), u.accountId, !!accept);
     if (!r) return ack?.({ error: 'That request is no longer open.' });
     if (accept) {
+      chat.connect(u.accountId, r.from_id);
       if (isOnline(r.from_id)) io.to(`account:${r.from_id}`).emit('connect-accepted', { accountId: u.accountId, name: u.name });
       else background.notify(r.from_id, 'accepted', { name: u.name });
     }
@@ -1052,10 +1087,18 @@ io.on('connection', (socket) => {
     else if (kind !== 'unscheduled') background.notify(otherId, kind, { name: u.name, at, urgent: true });
   }
 
-  socket.on('connect-propose', ({ id, slots } = {}, ack) => {
+  // `id` is the connection's request; `accountId` works for anyone you're connected with
+  // (a new connection request is opened for the meeting if needed).
+  socket.on('connect-propose', ({ id, accountId, slots } = {}, ack) => {
     const u = me();
     if (!u) return;
-    const r = background.propose(Number(id), u.accountId, slots);
+    let requestId = Number(id);
+    if (!requestId && accountId) {
+      const other = Number(accountId);
+      if (!chat.isConnected(u.accountId, other) || safety.isBlocked(u.accountId, other)) return ack?.({ error: 'You can only plan a time with people you’ve connected with.' });
+      requestId = background.reopen(u.accountId, other, u.activity).id;
+    }
+    const r = background.propose(requestId, u.accountId, slots);
     if (r.error) return ack?.({ error: r.error });
     tellOther(r, u, 'proposed');
     scheduleRecompute();
@@ -1082,11 +1125,48 @@ io.on('connection', (socket) => {
     ack?.({ ok: true });
   });
 
+  // ---- Direct messages ----
+
+  socket.on('dm-send', ({ to, body } = {}, ack) => {
+    const u = me();
+    const toId = Number(to);
+    if (!u) return;
+    const res = chat.send(u.accountId, toId, body);
+    if (res.error) return ack?.({ error: res.error });
+    const payload = { ...res.message, fromName: u.name, fromAvatar: u.avatar };
+    io.to(`account:${u.accountId}`).to(`account:${toId}`).emit('dm', payload);
+    if (!isOnline(toId)) background.notify(toId, 'message', { name: u.name });
+    scheduleRecompute();
+    ack?.({ ok: true, message: res.message });
+  });
+
+  socket.on('dm-history', ({ with: other, before } = {}, ack) => {
+    const u = me();
+    const id = Number(other);
+    if (!u || !chat.canMessage(u.accountId, id)) return ack?.({ error: 'You can only message people you’ve connected with.' });
+    ack?.(chat.history(u.accountId, id, Number(before) || null));
+  });
+
+  socket.on('dm-read', ({ with: other } = {}) => {
+    const u = me();
+    const id = Number(other);
+    if (!u || !chat.markRead(u.accountId, id)) return;
+    io.to(`account:${id}`).emit('dm-read', { by: u.accountId, at: Date.now() });
+    io.to(`account:${u.accountId}`).emit('dm-read-self', { with: id });
+    scheduleRecompute();
+  });
+
+  socket.on('dm-typing', ({ to } = {}) => {
+    const u = me();
+    const id = Number(to);
+    if (u && chat.canMessage(u.accountId, id)) io.to(`account:${id}`).emit('dm-typing', { from: u.accountId });
+  });
+
   // Both said yes: ring them now (works from any screen, like a friend's call).
   socket.on('connect-call', ({ accountId } = {}, ack) => {
     const u = me();
     const targetId = Number(accountId);
-    if (!u || !background.connected(u.accountId, targetId)) return ack?.({ error: 'You can only call people who accepted.' });
+    if (!u || !trusted(u.accountId, targetId) || safety.isBlocked(u.accountId, targetId)) return ack?.({ error: 'You can only call people you’ve connected with.' });
     if (u.status === 'in-room') return ack?.({ error: 'Leave your current call first.' });
     const t = reachableSocket(targetId);
     if (!t) return ack?.({ error: 'They’re not online right now. You’ll see a Call button when they are.' });

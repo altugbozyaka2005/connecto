@@ -93,14 +93,14 @@
         ),
       ),
       el('dl', { class: 'report-facts' },
-        el('dt', {}, 'Where'), el('dd', {}, r.context === 'call' ? 'During or right after a call' : 'From the match list'),
+        el('dt', {}, 'Where'), el('dd', {}, { call: 'During or right after a call', chat: 'In direct messages', match: 'From the match list' }[r.context] || r.context),
         el('dt', {}, 'Their activity'), el('dd', {}, r.activity ? `“${r.activity}”` : '—'),
         el('dt', {}, 'Reported by'), el('dd', {}, `${r.reporter.name} (${r.reporter.email})`),
       ),
       r.details && el('blockquote', { class: 'report-details' }, r.details),
       r.transcript?.length
         ? el('details', { class: 'transcript' },
-            el('summary', {}, `Chat from the call (${r.transcript.length} messages)`),
+            el('summary', {}, `${r.context === 'chat' ? 'Direct messages' : 'Chat from the call'} (${r.transcript.length} messages)`),
             el('ol', {}, r.transcript.map((m) => el('li', {}, el('b', {}, m.name), ' ', m.text, el('time', {}, new Date(m.at).toLocaleTimeString())))))
         : r.context === 'call' && el('p', { class: 'report-meta' }, 'No chat messages were sent in this call.'),
       open

@@ -102,6 +102,7 @@ function sendConnectNotice(user, { kind, name, activity, at }) {
   const appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, '');
   const when = at ? localTime(user, at) : '';
   const copy = {
+    message: [`${name} sent you a message`, `${name} sent you a message on Connecto. Open Connects to read it and reply.`],
     proposed: [`${name} suggested times to meet`, `${name} proposed some times to talk. Open Connecto and pick the one that works for you.`],
     scheduled: [`Meeting with ${name} set for ${when}`, `${name} picked ${when}. We'll remind you shortly before. Open Connecto at that time and tap Join.`],
     reminder: [`Your meeting with ${name} starts soon`, `You're meeting ${name} at ${when}. Open Connecto and tap Join under Connects.`],

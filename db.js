@@ -178,4 +178,32 @@ if (!crColumns.has('proposed_slots')) db.exec('ALTER TABLE connect_requests ADD 
 if (!crColumns.has('meeting_at')) db.exec('ALTER TABLE connect_requests ADD COLUMN meeting_at INTEGER');
 if (!crColumns.has('reminded_at')) db.exec('ALTER TABLE connect_requests ADD COLUMN reminded_at INTEGER');
 
+// Connected people (both said yes to a background connect, ever) can message each other.
+// Stored once per pair, user_a < user_b.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS connections (
+    user_a     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_b     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_a, user_b),
+    CHECK (user_a < user_b)
+  );
+  CREATE TABLE IF NOT EXISTS messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    to_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body       TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    read_at    INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS messages_pair ON messages(from_id, to_id, created_at);
+  CREATE INDEX IF NOT EXISTS messages_unread ON messages(to_id, read_at);
+`);
+// Everyone who already said yes to each other before connections existed.
+db.exec(`
+  INSERT OR IGNORE INTO connections (user_a, user_b, created_at)
+  SELECT MIN(from_id, to_id), MAX(from_id, to_id), MIN(updated_at) FROM connect_requests
+  WHERE status IN ('accepted', 'done') AND from_id <> to_id GROUP BY MIN(from_id, to_id), MAX(from_id, to_id)
+`);
+
 module.exports = db;

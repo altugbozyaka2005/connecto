@@ -1607,8 +1607,8 @@
     let action;
     if (m.request) {
       card.dataset.state = 'connected';
-      cta.textContent = '✓ In Connects →';
-      action = () => openPage('connects');
+      cta.textContent = '✓ In Connects · chat →';
+      action = () => openChat(p.id);
     } else {
       cta.textContent = p.status === 'offline' ? 'Send request · they’ll see it later' : 'Send request →';
       action = async () => {
@@ -1668,7 +1668,6 @@
 
   // ---------- Connects ----------
 
-  const GROUPS = ['answer', 'scheduled', 'ready', 'waiting', 'recent'];
   const JOIN_EARLY_MS = 10 * 60 * 1000;
 
   // "Tue, Oct 7, 7:00 PM (9:00 PM their time)"
@@ -1691,10 +1690,10 @@
     return h < 48 ? `in ${h}h` : `in ${Math.round(h / 24)} days`;
   }
 
+  // Connects badge: requests and time suggestions to answer, meetings about to start, unread messages.
   const connectsUrgent = () => {
     const cx = state.inbox.connects;
-    return cx.answer.length + cx.ready.filter((r) => r.available).length
-      + cx.scheduled.filter((r) => r.meetingAt - Date.now() < JOIN_EARLY_MS).length;
+    return cx.answer.length + cx.scheduled.filter((r) => r.meetingAt - Date.now() < JOIN_EARLY_MS).length + unreadTotal();
   };
 
   async function callBack(person, joining = false) {
@@ -1714,91 +1713,199 @@
     else toast({ title: `You and ${person.name} both want to connect 🎉`, body: person.status === 'offline' ? 'They’re offline. Propose a time under Ready to talk.' : 'They’re online now. Tap Call now.' });
   }
 
-  // A connect, drawn like a match card, with the buttons for its group.
-  function connectCard(it, group) {
-    const p = it.person;
-    const card = $('#match-card-tpl').content.firstElementChild.cloneNode(true);
-    card.classList.add('cx-card');
-    card.dataset.group = group;
-    card.querySelector('.match-hit').remove();
-    card.querySelector('.card-more').remove();
-    const av = card.querySelector('.avatar');
-    paintAvatar(av, p.name, p.avatar);
-    av.classList.add('presence');
-    av.dataset.status = p.status;
-    card.querySelector('.name-text').textContent = p.name;
-    card.querySelector('.pill-friend').hidden = !it.friend;
-    if (it.new) card.querySelector('.match-name').append(newTag());
-    card.querySelector('.match-meta').textContent = [statusLine(p), metaLine(p)].filter(Boolean).join(' · ');
-    card.querySelector('.match-activity').textContent = `“${it.activity}”`;
-    card.querySelector('.match-bio').textContent = p.bio || '';
-    const chips = card.querySelector('.mini-chips');
-    for (const i of p.interests || []) {
-      const c = document.createElement('span');
-      c.className = 'mini-chip';
-      c.textContent = i;
-      chips.append(c);
+  // ---------- Connects: sidebar + conversations (like Discord DMs) ----------
+
+  // Sidebar sections, top to bottom. Each person shows once, in the first section that has them.
+  const SECTIONS = [
+    { key: 'answer', title: 'Needs your answer' },
+    { key: 'scheduled', title: 'Scheduled' },
+    { key: 'people', title: 'Direct messages' },
+    { key: 'waiting', title: 'Waiting on them' },
+  ];
+  let selectedChat = null; // accountId of the open conversation
+  const dms = new Map(); // accountId -> { messages, more, loaded, loading, seenAt }
+  const myId = () => state.user?.id;
+  const isDesktop = () => window.matchMedia('(min-width: 761px)').matches;
+  // The conversation with `id` is on screen (on phones the list and the chat take turns).
+  const chatVisible = (id) => selectedChat === id && !!document.querySelector('#screen-connects[data-active]')
+    && (isDesktop() || $('#dc').dataset.view === 'chat');
+  const typingFrom = new Map(); // accountId -> timer for "is typing…"
+
+  // Everything we know about one person in Connects.
+  function entryFor(id) {
+    const cx = state.inbox.connects;
+    const find = (list) => list.find((x) => x.person.id === id) || null;
+    const e = {
+      answer: find(cx.answer), scheduled: find(cx.scheduled), waiting: find(cx.waiting),
+      ready: find(cx.ready), dm: find(cx.people || []),
+    };
+    e.person = (e.dm || e.answer || e.scheduled || e.waiting || e.ready)?.person || null;
+    e.canChat = !!e.dm;
+    return e;
+  }
+
+  // Sidebar sections with each person once.
+  function sections() {
+    const cx = state.inbox.connects;
+    const seen = new Set();
+    const take = (list) => list.filter((x) => !seen.has(x.person.id) && seen.add(x.person.id));
+    return {
+      answer: take(cx.answer),
+      scheduled: take(cx.scheduled),
+      people: take(cx.people || []),
+      waiting: take(cx.waiting),
+    };
+  }
+
+  const unreadTotal = () => (state.inbox.connects.people || []).reduce((n, p) => n + p.unread, 0);
+
+  function subtitle(key, it) {
+    if (key === 'answer') return it.kind === 'times' ? '📅 Suggested times · pick one' : `Wants to connect${it.activity ? ` · “${short(it.activity, 30)}”` : ''}`;
+    if (key === 'scheduled') return `📅 ${new Date(it.meetingAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })} · ${inText(it.meetingAt)}`;
+    if (key === 'waiting') return it.kind === 'times' ? 'You suggested times' : 'Request sent';
+    const typing = typingFrom.has(it.person.id);
+    if (typing) return 'typing…';
+    if (it.last) return `${it.last.mine ? 'You: ' : ''}${it.last.body.replace(/\s+/g, ' ')}`;
+    if (it.person.doing) return `${it.person.status === 'in-call' ? 'In a call' : 'Matching on'} “${short(it.person.doing, 30)}”`;
+    return 'Say hi 👋';
+  }
+
+  function renderSidebar() {
+    const groups = sections();
+    const q = $('#dc-filter').value.trim().toLowerCase();
+    const nav = $('#dc-cats');
+    nav.textContent = '';
+    let any = false;
+    for (const { key, title } of SECTIONS) {
+      const items = groups[key].filter((it) => !q || it.person.name.toLowerCase().includes(q));
+      if (!items.length) continue;
+      any = true;
+      const sec = document.createElement('section');
+      sec.className = 'dc-cat';
+      sec.dataset.key = key;
+      const h = document.createElement('h4');
+      h.textContent = `${title} — ${items.length}`;
+      const ul = document.createElement('ul');
+      for (const it of items) {
+        const li = document.createElement('li');
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'dc-item';
+        if (it.person.id === selectedChat) b.setAttribute('aria-current', 'true');
+        const av = document.createElement('div');
+        av.className = 'avatar avatar-sm presence';
+        paintAvatar(av, it.person.name, it.person.avatar);
+        av.dataset.status = it.person.status;
+        const text = document.createElement('span');
+        text.className = 'dc-item-text';
+        const name = document.createElement('strong');
+        name.textContent = it.person.name;
+        const sub = document.createElement('span');
+        sub.textContent = subtitle(key, it);
+        if (typingFrom.has(it.person.id) && key === 'people') sub.className = 'dc-typing-sub';
+        text.append(name, sub);
+        b.append(av, text);
+        const unread = key === 'people' ? it.unread : 0;
+        if (unread) {
+          b.dataset.unread = '';
+          const badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.textContent = unread > 99 ? '99+' : unread;
+          b.append(badge);
+        } else if (it.new) {
+          b.append(newTag());
+        }
+        b.addEventListener('click', () => openChat(it.person.id));
+        li.append(b);
+        ul.append(li);
+      }
+      sec.append(h, ul);
+      nav.append(sec);
     }
+    $('#dc-side-empty').hidden = any || !!q;
+  }
+  $('#dc-filter').addEventListener('input', renderSidebar);
 
-    const note = document.createElement('p');
-    note.className = 'cx-note';
-    const foot = card.querySelector('.match-foot');
-    foot.textContent = '';
-    foot.className = 'cx-actions';
-    const add = (...btns) => foot.append(...btns);
-    const propose = (label, cls) => button(label, cls, () => openPropose(it));
-    const unschedule = (label) => button(label, 'btn btn-ghost bgp-stop', () => emit('connect-unschedule', { id: it.id }));
+  // Open someone's conversation (from anywhere: a toast, a match card, the sidebar).
+  function openChat(id) {
+    selectedChat = id;
+    $('#dc').dataset.view = 'chat';
+    if (!document.querySelector('#screen-connects[data-active]')) openPage('connects');
+    else renderConnects();
+    $('#dc-input').value = '';
+    if (entryFor(id).canChat) {
+      loadHistory(id);
+      if (isDesktop()) $('#dc-input').focus();
+    }
+  }
+  $('#dc-back').addEventListener('click', () => { $('#dc').dataset.view = 'list'; });
 
-    if (group === 'answer' && it.kind === 'request') {
-      note.textContent = `Wants to connect · ${ago(it.at)}`;
-      add(
-        button('Decline', 'btn btn-ghost', () => emit('connect-respond', { id: it.id, accept: false })),
-        button('Accept', 'btn btn-good', () => acceptConnect(it.id, p)),
-      );
-    } else if (group === 'answer') {
-      note.textContent = `${p.name} suggested ${it.proposal.slots.length === 1 ? 'a time' : 'some times'}. Pick one:`;
-      const slots = document.createElement('div');
-      slots.className = 'cx-slots';
-      for (const t of it.proposal.slots) {
-        slots.append(button(whenText(t, p), 'btn btn-good slot-btn', async () => {
-          const res = await emit('connect-pick', { id: it.id, slot: t });
-          if (res.error) toast({ title: 'Couldn’t pick that time', body: res.error });
-          else toast({ title: `Meeting set with ${p.name} 📅`, body: `${whenText(t, p)}. We’ll remind you both 10 minutes before.` });
-        }));
+  function renderConnects() {
+    renderSidebar();
+    const e = selectedChat ? entryFor(selectedChat) : null;
+    // Desktop, on this page: open the most relevant conversation by default.
+    if (!e?.person && isDesktop() && document.querySelector('#screen-connects[data-active]')) {
+      const g = sections();
+      const first = g.answer[0] || g.scheduled[0] || g.people[0] || g.waiting[0];
+      if (first) {
+        selectedChat = first.person.id;
+        if (entryFor(selectedChat).canChat) loadHistory(selectedChat);
+        return renderConnects();
       }
-      card.querySelector('.match-info').append(note, slots);
-      add(propose('Suggest another time', 'btn btn-ghost'));
-    } else if (group === 'ready') {
-      note.textContent = it.available ? 'You both said yes · online now' : `You both said yes · ${p.name} is offline`;
-      if (it.available) {
-        const call = button('Call now', 'btn btn-primary', () => callBack(p));
-        call.disabled = !!state.room;
-        add(call, propose('Propose a time', 'btn btn-ghost'));
-      } else {
-        add(propose('Propose a time', 'btn btn-primary'));
-      }
-    } else if (group === 'scheduled') {
-      note.classList.add('cx-when');
-      note.textContent = `📅 ${whenText(it.meetingAt, p)} · ${inText(it.meetingAt)}`;
-      const open = it.meetingAt - Date.now() < JOIN_EARLY_MS;
-      const join = button(open ? 'Join' : 'Join opens 10 min before', open ? 'btn btn-good' : 'btn btn-ghost', () => callBack(p, true));
-      join.disabled = !open || !!state.room;
-      add(join, propose('Reschedule', 'btn btn-ghost'), unschedule('Cancel'));
-    } else if (group === 'waiting' && it.kind === 'request') {
-      note.textContent = `Request sent ${ago(it.at)}`;
-      add(button('Cancel request', 'btn btn-ghost', () => emit('connect-cancel', { id: it.id })));
-    } else if (group === 'waiting') {
-      note.textContent = `You proposed: ${it.proposal.slots.map((t) => whenText(t, p)).join(' · ')}`;
-      add(propose('Change times', 'btn btn-ghost'), unschedule('Withdraw'));
-    } else {
-      note.textContent = `Talked ${ago(it.at)}`;
-      if (it.friend) {
-        const f = button('Friends ✓', 'btn btn-ghost', null);
-        f.disabled = true;
-        add(f);
-      } else {
-        add(button('Add friend', 'btn btn-ghost', async (e) => {
-          e.currentTarget.disabled = true;
+    }
+    $('#dc-blank').hidden = !!e?.person;
+    $('#dc-convo').hidden = !e?.person;
+    if (!e?.person) {
+      if ($('#dc').dataset.view === 'chat') $('#dc').dataset.view = 'list';
+      return;
+    }
+    renderConvoHead(e);
+    renderBanner(e);
+    renderIntro(e);
+    renderMessages();
+    $('#dc-compose').hidden = !e.canChat;
+    $('#dc-locked').hidden = e.canChat;
+    $('#dc-locked').textContent = e.answer?.kind === 'request'
+      ? `Accept ${e.person.name}’s request to start chatting.`
+      : `You can message ${e.person.name} once they accept your request.`;
+    $('#dc-input').placeholder = `Message ${e.person.name}`;
+  }
+
+  function iconButton(label, svgPath, cls, onClick) {
+    const b = button('', cls, onClick);
+    b.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="${svgPath}"/></svg><span class="dc-act-label"></span>`;
+    b.querySelector('.dc-act-label').textContent = label;
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    return b;
+  }
+  const ICON_CALL = 'M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8Z';
+  const ICON_CAL = 'M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7Zm12 18H5V9h14v11Z';
+  const ICON_ADD = 'M15 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6Zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4Z';
+  const ICON_MORE = 'M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z';
+
+  function renderConvoHead(e) {
+    const p = e.person;
+    const av = $('#dc-avatar');
+    paintAvatar(av, p.name, p.avatar);
+    av.dataset.status = p.status;
+    $('#dc-name').textContent = p.name;
+    $('#dc-status').textContent = [
+      statusLine(p),
+      p.doing && `${p.status === 'in-call' ? 'in a call' : 'matching on'} “${short(p.doing, 40)}”`,
+      metaLine(p),
+    ].filter(Boolean).join(' · ');
+    const box = $('#dc-actions');
+    box.textContent = '';
+    if (e.canChat) {
+      const call = iconButton('Call', ICON_CALL, 'btn btn-ghost dc-act', () => callBack(p));
+      call.disabled = !e.dm.available || !!state.room;
+      if (!e.dm.available) call.title = `${p.name} is offline. Plan a time instead.`;
+      const plan = iconButton(e.scheduled ? 'Reschedule' : 'Plan a time', ICON_CAL, 'btn btn-ghost dc-act', () => openPropose(e.scheduled || e.ready || e.waiting?.kind === 'times' && e.waiting || { person: p }));
+      box.append(call, plan);
+      if (!e.dm.friend) {
+        box.append(iconButton('Add friend', ICON_ADD, 'btn btn-ghost dc-act', async (ev) => {
+          ev.currentTarget.disabled = true;
           const res = await emit('friend-request', { accountId: p.id });
           if (res.error) return toast({ title: 'Couldn’t add friend', body: res.error });
           toast(res.status === 'friends'
@@ -1806,50 +1913,288 @@
             : { title: 'Friend request sent', body: `If ${p.name} adds you too, you’ll be friends.`, timeout: 3000 });
         }));
       }
-      add(button('Call again', 'btn btn-primary', async () => {
-        if (it.friend && it.available) {
-          const res = await emit('friend-invite', { id: p.id });
-          if (res.error) return toast({ title: 'Couldn’t call', body: res.error });
-          if (!res.matched) toast({ title: `Calling ${p.name}…`, body: 'You’ll join as soon as they accept.', timeout: 3500 });
-          return;
-        }
-        const res = await emit('connect-request', { accountId: p.id });
-        if (res.error) return toast({ title: 'Couldn’t send request', body: res.error });
-        toast({ title: `Asked ${p.name} to talk again`, body: 'They’ll see it under Connects.', timeout: 3500 });
-      }));
     }
-    if (!note.parentNode) card.querySelector('.match-info').append(note);
-    return card;
+    const more = iconButton('More', ICON_MORE, 'btn btn-ghost dc-act dc-more', (ev) => {
+      ev.stopPropagation();
+      openCardMenu(ev.currentTarget, { id: `acct-${p.id}`, name: p.name }, { accountId: p.id });
+    });
+    box.append(more);
   }
 
-  function renderConnects() {
-    const cx = state.inbox.connects;
-    for (const g of GROUPS) {
-      const sec = document.querySelector(`.cx-section[data-group="${g}"]`);
-      sec.hidden = !cx[g].length;
-      sec.querySelector('.cx-n').textContent = cx[g].length;
-      const grid = sec.querySelector('.cx-grid');
-      grid.textContent = '';
-      for (const it of cx[g]) grid.append(connectCard(it, g));
+  // What's going on with this person: a request, suggested times, a meeting.
+  function renderBanner(e) {
+    const box = $('#dc-banner');
+    box.textContent = '';
+    const p = e.person;
+    const line = (text) => { const el = document.createElement('p'); el.textContent = text; box.append(el); return el; };
+    const actions = (...btns) => { const d = document.createElement('div'); d.className = 'dc-banner-actions'; d.append(...btns); box.append(d); };
+    const propose = (label, cls, item) => button(label, cls, () => openPropose(item));
+    const unschedule = (label, id) => button(label, 'btn btn-ghost bgp-stop', () => emit('connect-unschedule', { id }));
+    box.dataset.tone = '';
+    if (e.answer?.kind === 'request') {
+      box.dataset.tone = 'accent';
+      line([`${p.name} wants to connect`, e.answer.activity && `“${e.answer.activity}”`, ago(e.answer.at)].filter(Boolean).join(' · '));
+      actions(
+        button('Decline', 'btn btn-ghost', () => emit('connect-respond', { id: e.answer.id, accept: false })),
+        button('Accept', 'btn btn-good', () => acceptConnect(e.answer.id, p)),
+      );
+    } else if (e.answer) {
+      box.dataset.tone = 'accent';
+      line(`${p.name} suggested ${e.answer.proposal.slots.length === 1 ? 'a time' : 'some times'} to talk. Pick one:`);
+      actions(
+        ...e.answer.proposal.slots.map((t) => button(whenText(t, p), 'btn btn-good', async () => {
+          const res = await emit('connect-pick', { id: e.answer.id, slot: t });
+          if (res.error) toast({ title: 'Couldn’t pick that time', body: res.error });
+          else toast({ title: `Meeting set with ${p.name} 📅`, body: `${whenText(t, p)}. We’ll remind you both 10 minutes before.` });
+        })),
+        propose('Suggest another time', 'btn btn-ghost', e.answer),
+      );
+    } else if (e.scheduled) {
+      box.dataset.tone = 'good';
+      const open = e.scheduled.meetingAt - Date.now() < JOIN_EARLY_MS;
+      line(`📅 Meeting ${whenText(e.scheduled.meetingAt, p)} · ${inText(e.scheduled.meetingAt)}`).className = 'dc-banner-strong';
+      const join = button(open ? 'Join' : 'Join opens 10 min before', open ? 'btn btn-good' : 'btn btn-ghost', () => callBack(p, true));
+      join.disabled = !open || !!state.room;
+      actions(join, propose('Reschedule', 'btn btn-ghost', e.scheduled), unschedule('Cancel meeting', e.scheduled.id));
+    } else if (e.waiting?.kind === 'times') {
+      line(`You suggested: ${e.waiting.proposal.slots.map((t) => whenText(t, p)).join(' · ')}. Waiting for ${p.name} to pick.`);
+      actions(propose('Change times', 'btn btn-ghost', e.waiting), unschedule('Withdraw', e.waiting.id));
+    } else if (e.waiting) {
+      line(`Request sent ${ago(e.waiting.at)}. You can chat once ${p.name} accepts.`);
+      actions(button('Cancel request', 'btn btn-ghost', () => emit('connect-cancel', { id: e.waiting.id })));
     }
-    $('#connects-empty').hidden = GROUPS.some((g) => cx[g].length);
-    // What happened since the last visit
-    const requests = cx.answer.filter((r) => r.new && r.kind === 'request').length;
-    const times = cx.answer.filter((r) => r.new && r.kind === 'times').length;
-    const accepted = cx.ready.filter((r) => r.new).length;
-    const parts = [
-      requests && plural(requests, 'new request', 'new requests'),
-      accepted && `${accepted} accepted`,
-      times && `${plural(times, 'time suggestion', 'time suggestions')}`,
-    ].filter(Boolean);
-    $('#connects-summary').hidden = !parts.length;
-    $('#connects-summary').textContent = parts.length ? `While you were away: ${parts.join(' · ')}` : '';
+    box.hidden = !box.childElementCount;
   }
+
+  // Top of the conversation: who they are (like Discord's "beginning of your conversation").
+  function renderIntro(e) {
+    const p = e.person;
+    const box = $('#dc-intro');
+    box.textContent = '';
+    const av = document.createElement('div');
+    av.className = 'avatar avatar-lg';
+    paintAvatar(av, p.name, p.avatar);
+    const h = document.createElement('h3');
+    h.textContent = p.name;
+    if (e.dm?.friend) {
+      const f = document.createElement('span');
+      f.className = 'pill-friend';
+      f.textContent = 'Friend';
+      h.append(' ', f);
+    }
+    const info = document.createElement('p');
+    const since = e.dm?.since;
+    info.textContent = e.canChat
+      ? (since ? `You connected ${ago(since)}. This is the start of your conversation.` : 'This is the start of your conversation.')
+      : [metaLine(p)].filter(Boolean).join(' · ');
+    box.append(av, h, info);
+    if (p.bio) {
+      const bio = document.createElement('p');
+      bio.className = 'dc-intro-bio';
+      bio.textContent = p.bio;
+      box.append(bio);
+    }
+    if (p.interests?.length) {
+      const chips = document.createElement('div');
+      chips.className = 'mini-chips';
+      for (const i of p.interests) {
+        const c = document.createElement('span');
+        c.className = 'mini-chip';
+        c.textContent = i;
+        chips.append(c);
+      }
+      box.append(chips);
+    }
+  }
+
+  async function loadHistory(id, older = false) {
+    const d = dms.get(id) || { messages: [], more: false, loaded: false, loading: false, seenAt: 0 };
+    dms.set(id, d);
+    if (d.loading || (d.loaded && !older)) {
+      if (d.loaded) markRead(id);
+      return renderMessages();
+    }
+    d.loading = true;
+    const res = await emit('dm-history', { with: id, before: older ? d.messages[0]?.id : undefined });
+    d.loading = false;
+    if (res.error) return;
+    const scroller = $('#dc-scroll');
+    const fromBottom = scroller.scrollHeight - scroller.scrollTop;
+    const known = new Set(d.messages.map((m) => m.id));
+    d.messages = [...res.messages.filter((m) => !known.has(m.id)), ...d.messages].sort((a, b) => a.id - b.id);
+    d.more = res.more;
+    d.loaded = true;
+    const lastMineRead = [...d.messages].reverse().find((m) => m.from === myId() && m.read);
+    if (lastMineRead) d.seenAt = Math.max(d.seenAt, lastMineRead.at);
+    if (selectedChat === id) {
+      renderMessages(older ? null : 'bottom');
+      if (older) scroller.scrollTop = scroller.scrollHeight - fromBottom; // keep your place
+      markRead(id);
+    }
+  }
+  $('#dc-older').addEventListener('click', () => selectedChat && loadHistory(selectedChat, true));
+
+  function markRead(id) {
+    const p = (state.inbox.connects.people || []).find((x) => x.person.id === id);
+    if (p?.unread && document.visibilityState === 'visible' && chatVisible(id)) {
+      socket.emit('dm-read', { with: id });
+    }
+  }
+  document.addEventListener('visibilitychange', () => { if (selectedChat) markRead(selectedChat); });
+
+  const dayLabel = (ms) => {
+    const d = new Date(ms);
+    const today = new Date();
+    const yesterday = new Date(Date.now() - 86400000);
+    if (d.toDateString() === today.toDateString()) return 'Today';
+    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+  };
+
+  // Messages grouped like Discord: a new group when the sender changes or 5+ minutes pass.
+  function renderMessages(scroll = null) {
+    const box = $('#dc-messages');
+    const scroller = $('#dc-scroll');
+    const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    box.textContent = '';
+    const d = selectedChat && dms.get(selectedChat);
+    $('#dc-older').hidden = !d?.more;
+    if (!d || !entryFor(selectedChat).canChat) return;
+    const other = entryFor(selectedChat).person;
+    const me = state.user;
+    let prev = null;
+    let group = null;
+    for (const m of d.messages) {
+      if (!prev || new Date(prev.at).toDateString() !== new Date(m.at).toDateString()) {
+        const sep = document.createElement('div');
+        sep.className = 'dc-day';
+        sep.textContent = dayLabel(m.at);
+        box.append(sep);
+        prev = null;
+      }
+      if (!prev || prev.from !== m.from || m.at - prev.at > 5 * 60 * 1000) {
+        group = document.createElement('div');
+        group.className = 'dc-group';
+        const mine = m.from === me.id;
+        const av = document.createElement('div');
+        av.className = 'avatar avatar-sm';
+        const name = mine ? (me.displayName || me.firstName) : other.name;
+        paintAvatar(av, name, mine ? me.avatar : other.avatar);
+        const body = document.createElement('div');
+        body.className = 'dc-group-body';
+        const head = document.createElement('p');
+        head.className = 'dc-group-head';
+        const n = document.createElement('strong');
+        n.textContent = mine ? 'You' : other.name;
+        const t = document.createElement('time');
+        t.textContent = new Date(m.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        head.append(n, t);
+        body.append(head);
+        group.append(av, body);
+        box.append(group);
+      }
+      const p = document.createElement('p');
+      p.className = 'dc-msg';
+      p.textContent = m.body;
+      p.title = new Date(m.at).toLocaleString();
+      group.lastChild.append(p);
+      prev = m;
+    }
+    // "Seen" under your last message once they've read it.
+    const last = d.messages.at(-1);
+    if (last && last.from === me.id && d.seenAt >= last.at) {
+      const seen = document.createElement('p');
+      seen.className = 'dc-seen';
+      seen.textContent = 'Seen';
+      box.append(seen);
+    }
+    if (scroll === 'bottom' || atBottom) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  // Composer: Enter sends, Shift+Enter adds a line.
+  const input = $('#dc-input');
+  const autosize = () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; };
+  let lastTypingPing = 0;
+  input.addEventListener('input', () => {
+    autosize();
+    if (selectedChat && Date.now() - lastTypingPing > 3000) {
+      lastTypingPing = Date.now();
+      socket.emit('dm-typing', { to: selectedChat });
+    }
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      $('#dc-compose').requestSubmit();
+    }
+  });
+  $('#dc-compose').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = input.value.trim();
+    if (!body || !selectedChat) return;
+    input.value = '';
+    autosize();
+    lastTypingPing = 0;
+    const res = await emit('dm-send', { to: selectedChat, body });
+    if (res.error) {
+      input.value = body;
+      autosize();
+      toast({ title: 'Message not sent', body: res.error });
+    }
+  });
+
+  // Live messages (also echoed to your own other tabs).
+  socket.on('dm', (m) => {
+    const other = m.from === myId() ? m.to : m.from;
+    const d = dms.get(other);
+    if (d?.loaded && !d.messages.some((x) => x.id === m.id)) d.messages.push(m);
+    if (m.from === other) {
+      typingFrom.delete(other);
+      if (selectedChat === other) $('#dc-typing').textContent = '';
+    }
+    if (chatVisible(other)) {
+      renderMessages(m.from === myId() ? 'bottom' : null);
+      if (m.from === other && document.visibilityState === 'visible') socket.emit('dm-read', { with: other });
+    } else if (m.from === other) {
+      const el = toast({
+        title: m.fromName,
+        body: m.body.length > 140 ? `${m.body.slice(0, 139)}…` : m.body,
+        avatarOf: { name: m.fromName, avatar: m.fromAvatar },
+        timeout: 8000,
+        actions: [{ label: 'Reply', cls: 'btn-primary', onClick: () => { dismiss(el); openChat(other); } }],
+      });
+    }
+  });
+
+  socket.on('dm-read', ({ by, at }) => {
+    const d = dms.get(by);
+    if (!d) return;
+    d.seenAt = Math.max(d.seenAt, at);
+    if (selectedChat === by) renderMessages();
+  });
+
+  socket.on('dm-typing', ({ from }) => {
+    clearTimeout(typingFrom.get(from));
+    typingFrom.set(from, setTimeout(() => {
+      typingFrom.delete(from);
+      if (selectedChat === from) $('#dc-typing').textContent = '';
+      renderSidebar();
+    }, 4500));
+    if (selectedChat === from) {
+      const p = entryFor(from).person;
+      $('#dc-typing').textContent = p ? `${p.name} is typing…` : '';
+    }
+    renderSidebar();
+  });
 
   // Countdowns and the Join button move with the clock.
   setInterval(() => {
     renderBadges();
-    if (document.querySelector('#screen-connects[data-active]')) renderConnects();
+    if (document.querySelector('#screen-connects[data-active]') && selectedChat) {
+      const e = entryFor(selectedChat);
+      if (e.person) renderBanner(e);
+      renderSidebar();
+    }
   }, 30 * 1000);
 
   // ---------- Propose a time ----------
@@ -1904,7 +2249,8 @@
   });
   $('#propose-go').addEventListener('click', async () => {
     const slots = [...$('#propose-slots').querySelectorAll('input')].map((i) => new Date(i.value).getTime()).filter(Number.isFinite);
-    const res = await emit('connect-propose', { id: proposing.id, slots });
+    // Someone you're connected with but have no open request with: plan by account.
+    const res = await emit('connect-propose', proposing.id ? { id: proposing.id, slots } : { accountId: proposing.person.id, slots });
     if (res.error) { $('#propose-dialog .form-error').textContent = res.error; return; }
     $('#propose-dialog').close();
     toast({ title: 'Times sent', body: `${proposing.person.name} will pick one. We’ll let you know.`, timeout: 3500 });
@@ -1914,7 +2260,8 @@
 
   function renderBadges() {
     const n = connectsUrgent();
-    document.querySelectorAll('.connects-badge').forEach((b) => { b.textContent = n; b.hidden = !n; });
+    document.querySelectorAll('.connects-badge').forEach((b) => { b.textContent = n > 99 ? '99+' : n; b.hidden = !n; });
+    document.title = n ? `(${n}) Connecto` : 'Connecto';
   }
 
   function renderInbox() {
@@ -1975,7 +2322,7 @@
       body: 'You both want to connect. Call now, or set a time under Connects.',
       timeout: 20000,
       actions: [
-        { label: 'Connects', onClick: () => { dismiss(el); openPage('connects'); } },
+        { label: 'Message', onClick: () => { dismiss(el); openChat(accountId); } },
         { label: 'Call now', cls: 'btn-good', onClick: async () => {
           dismiss(el);
           const res = await emit('connect-call', { accountId });
@@ -2025,7 +2372,8 @@
 
   // ⋯ menu on match cards
   let cardMenuFor = null;
-  function openCardMenu(btn, match) {
+  // `target` defaults to the live match's socket; Connects passes { accountId }.
+  function openCardMenu(btn, match, target = { target: match.id }) {
     const menu = $('#card-menu');
     if (cardMenuFor === match.id && !menu.hidden) return closeCardMenu();
     closeCardMenu();
@@ -2040,8 +2388,8 @@
       const action = e.target.closest('[data-action]')?.dataset.action;
       if (!action) return;
       closeCardMenu();
-      if (action === 'report') openReport({ target: match.id }, match.name, false);
-      if (action === 'block') confirmBlock({ target: match.id }, match.name, false);
+      if (action === 'report') openReport(target, match.name, false);
+      if (action === 'block') confirmBlock(target, match.name, false);
     };
   }
   function closeCardMenu() {

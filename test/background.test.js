@@ -90,7 +90,8 @@ test('background search: away card, request while offline, email, inbox, accept,
   // After the call starts, that request is done: it leaves "ready" and shows as history.
   const after = await waitFor(live.sock, 'inbox', (p) => !p.connects.ready.length);
   assert.strictEqual(after.connects.recent[0].person.id, away.user.id);
-  assert.ok((await call(live.sock, 'connect-call', { accountId: away.user.id })).error, 'no longer "connected" once they talked');
+  // They stay connected for good (Connects → direct messages), whatever happens to the request.
+  assert.ok((await call(live.sock, 'dm-send', { to: away.user.id, body: 'nice talking!' })).ok);
   // From "Talked recently": add as friend, or ask to talk again.
   assert.strictEqual((await call(live.sock, 'friend-request', { accountId: away.user.id })).status, 'pending');
   assert.ok((await call(live.sock, 'friend-request', { accountId: other.user.id })).error, 'only people you talked to');

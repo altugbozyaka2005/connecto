@@ -306,39 +306,52 @@
     <!-- 3c. Connects -->
     <section class="screen" id="screen-connects">
       <header class="topbar" data-topbar></header>
-      <main class="bgp-main">
-        <div class="bgp-hero">
-          <div>
+      <main class="dc" id="dc" data-view="list">
+        <aside class="dc-side" aria-label="Your connects">
+          <div class="dc-side-head">
             <h2>Connects</h2>
-            <p>People you matched with through background searches. Accept, call when you're both online, or set a time to meet.</p>
+            <input type="search" id="dc-filter" placeholder="Find someone" aria-label="Find someone" autocomplete="off" />
           </div>
-        </div>
-        <p class="bgp-summary" id="connects-summary" hidden></p>
-        <section class="cx-section" data-group="answer" hidden>
-          <h3>Needs your answer <span class="cx-n"></span></h3>
-          <div class="grid cx-grid"></div>
+          <nav class="dc-cats" id="dc-cats"></nav>
+          <div class="dc-side-empty" id="dc-side-empty" hidden>
+            <p>No connects yet. When someone you matched with in the background says yes, you can chat with them here.</p>
+            <button type="button" class="btn btn-primary" data-page="background">Background searches</button>
+          </div>
+        </aside>
+        <section class="dc-main">
+          <div class="dc-blank" id="dc-blank">
+            <div class="dc-blank-icon" aria-hidden="true">💬</div>
+            <h3>Your conversations</h3>
+            <p>Pick someone on the left to chat, call, or plan a time to meet.</p>
+          </div>
+          <div class="dc-convo" id="dc-convo" hidden>
+            <header class="dc-head">
+              <button type="button" class="btn btn-ghost dc-back" id="dc-back" aria-label="Back to the list">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg>
+              </button>
+              <div class="avatar avatar-sm presence" id="dc-avatar"></div>
+              <div class="dc-who">
+                <strong id="dc-name"></strong>
+                <span id="dc-status"></span>
+              </div>
+              <div class="dc-actions" id="dc-actions"></div>
+            </header>
+            <div class="dc-banner" id="dc-banner" hidden></div>
+            <div class="dc-scroll" id="dc-scroll">
+              <div class="dc-intro" id="dc-intro"></div>
+              <button type="button" class="link-btn link-accent dc-older" id="dc-older" hidden>Load earlier messages</button>
+              <div class="dc-messages" id="dc-messages" aria-live="polite"></div>
+            </div>
+            <p class="dc-typing" id="dc-typing"></p>
+            <form class="dc-compose" id="dc-compose" autocomplete="off">
+              <textarea id="dc-input" rows="1" maxlength="2000" placeholder="Message"></textarea>
+              <button type="submit" class="btn btn-primary" aria-label="Send">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg>
+              </button>
+            </form>
+            <p class="dc-locked" id="dc-locked" hidden></p>
+          </div>
         </section>
-        <section class="cx-section" data-group="scheduled" hidden>
-          <h3>Scheduled <span class="cx-n"></span></h3>
-          <div class="grid cx-grid"></div>
-        </section>
-        <section class="cx-section" data-group="ready" hidden>
-          <h3>Ready to talk <span class="cx-n"></span></h3>
-          <div class="grid cx-grid"></div>
-        </section>
-        <section class="cx-section" data-group="waiting" hidden>
-          <h3>Waiting on them <span class="cx-n"></span></h3>
-          <div class="grid cx-grid"></div>
-        </section>
-        <section class="cx-section" data-group="recent" hidden>
-          <h3>Talked recently <span class="cx-n"></span></h3>
-          <div class="grid cx-grid"></div>
-        </section>
-        <div class="bgp-empty" id="connects-empty" hidden>
-          <h3>No connects yet</h3>
-          <p>When someone you matched with in the background sends you a request, or accepts yours, they show up here.</p>
-          <button type="button" class="btn btn-primary" data-page="background">Go to Background searches</button>
-        </div>
       </main>
     </section>
 
