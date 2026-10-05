@@ -438,6 +438,19 @@
     show('screen-matches');
   });
 
+  // The logo takes you back to the main page ("What are you doing right now?").
+  document.querySelectorAll('a.brand-sm').forEach((logo) => logo.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (state.room || !state.user) return;
+    if (document.querySelector('#screen-matches[data-active]')) {
+      socket.emit('stop-searching');
+      clearIncoming();
+    }
+    $('#activity-input').value = state.activity;
+    show('screen-activity');
+    $('#activity-input').focus();
+  }));
+
   $('#change-activity-btn').addEventListener('click', () => {
     socket.emit('stop-searching');
     clearIncoming();
@@ -1426,8 +1439,14 @@
     // Top bar button: a green dot while any background search is running.
     document.querySelectorAll('.bg-top-btn').forEach((b) => {
       b.toggleAttribute('data-on', !!searches.length);
-      b.querySelector('.bg-top-dot').hidden = !searches.length;
-      b.title = searches.length ? `Background searches · ${searches.length} running` : 'Background searches';
+      // Running: a green dot, with the number of people matched once there are any.
+      const dot = b.querySelector('.bg-top-dot');
+      dot.hidden = !searches.length;
+      dot.textContent = total ? (total > 99 ? '99+' : total) : '';
+      dot.toggleAttribute('data-count', !!total);
+      b.title = !searches.length ? 'Background searches'
+        : `Background searches · ${searches.length} running · ${plural(total, 'person', 'people')} matched`;
+      b.setAttribute('aria-label', b.title);
     });
     const btn = $('#bg-btn');
     btn.toggleAttribute('data-on', !!searches.length);
