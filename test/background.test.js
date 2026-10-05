@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { start, stop, signedInSocket, lastEmail, once, call, matchUp, Client } = require('./helpers');
+const db = require('../db');
+const { sendMeetingReminders } = require('../server');
 const { outbox } = require('../mail');
 
 let base;
@@ -64,18 +66,18 @@ test('background search: away card, request while offline, email, inbox, accept,
   // Aylin comes back: her inbox lists both requests.
   const back = await reconnect(away.cookie);
   opened.push(back);
-  const inbox = await waitFor(back, 'inbox', (p) => p.incoming.length === 2);
+  const inbox = await waitFor(back, 'inbox', (p) => p.connects.answer.length === 2);
   assert.strictEqual(inbox.searches[0].activity, 'bg test learning the violin');
   assert.ok(inbox.lastSeen, 'last visit recorded when her tab closed');
-  assert.ok(inbox.incoming.every((r) => r.new), 'requests made while she was away are flagged new');
-  const fromBaris = inbox.incoming.find((r) => r.person.id === live.user.id);
+  assert.ok(inbox.connects.answer.every((r) => r.new && r.kind === 'request'), 'requests made while she was away are flagged new');
+  const fromBaris = inbox.connects.answer.find((r) => r.person.id === live.user.id);
   assert.strictEqual(fromBaris.activity, 'bg test practicing violin');
 
   // She accepts; Baris is online, so he's told right away and can call her even though she's idle.
   const accepted = once(live.sock, 'connect-accepted');
   await call(back, 'connect-respond', { id: fromBaris.id, accept: true });
   assert.strictEqual((await accepted).accountId, away.user.id);
-  const ready = await waitFor(live.sock, 'inbox', (p) => p.ready.some((r) => r.person.id === away.user.id && r.available));
+  const ready = await waitFor(live.sock, 'inbox', (p) => p.connects.ready.some((r) => r.person.id === away.user.id && r.available));
   assert.ok(ready);
 
   const ring = once(back, 'incoming-request');
@@ -86,9 +88,15 @@ test('background search: away card, request while offline, email, inbox, accept,
   await rooms;
 
   // After the call starts, that request is done: it leaves "ready" and shows as history.
-  const after = await waitFor(live.sock, 'inbox', (p) => !p.ready.length);
-  assert.strictEqual(after.history[0].person.id, away.user.id);
+  const after = await waitFor(live.sock, 'inbox', (p) => !p.connects.ready.length);
+  assert.strictEqual(after.connects.recent[0].person.id, away.user.id);
   assert.ok((await call(live.sock, 'connect-call', { accountId: away.user.id })).error, 'no longer "connected" once they talked');
+  // From "Talked recently": add as friend, or ask to talk again.
+  assert.strictEqual((await call(live.sock, 'friend-request', { accountId: away.user.id })).status, 'pending');
+  assert.ok((await call(live.sock, 'friend-request', { accountId: other.user.id })).error, 'only people you talked to');
+  assert.strictEqual((await call(live.sock, 'connect-request', { accountId: away.user.id })).status, 'pending');
+  const again = await waitFor(live.sock, 'inbox', (p) => p.connects.waiting.some((r) => r.person.id === away.user.id));
+  assert.ok(!again.connects.recent.some((r) => r.person.id === away.user.id), 'each person sits in one group');
 });
 
 test('two background searches find each other', async (t) => {
@@ -233,4 +241,48 @@ test('several background searches at once, each with its own matches; edit and s
   await call(a.sock, 'bg-stop', { id: chess.id });
   const left = await waitFor(a.sock, 'inbox', (p) => !of(p, chess.id));
   assert.strictEqual(left.searches.length, 2);
+});
+
+test('scheduling a meeting: propose times, pick one, reminder, cancel', async (t) => {
+  const a = await signedInSocket(base, { firstName: 'Rana' });
+  const b = await signedInSocket(base, { firstName: 'Sena' });
+  t.after(() => [a, b].forEach((x) => x.sock.close()));
+  await call(a.sock, 'bg-start', { hours: 24, activity: 'schedule test pottery wheel' });
+  await call(b.sock, 'connect-request', { accountId: a.user.id });
+  const asked = await waitFor(a.sock, 'inbox', (p) => p.connects.answer.length);
+  await call(a.sock, 'connect-respond', { id: asked.connects.answer[0].id, accept: true });
+  const ready = await waitFor(a.sock, 'inbox', (p) => p.connects.ready.length);
+  const id = ready.connects.ready[0].id;
+
+  const hour = 60 * 60 * 1000;
+  const slots = [Date.now() + 3 * hour, Date.now() + 26 * hour];
+  assert.ok((await call(a.sock, 'connect-propose', { id, slots: [Date.now() - hour] })).error, 'no times in the past');
+  assert.ok((await call(a.sock, 'connect-propose', { id, slots: [1, 2, 3, 4].map((i) => Date.now() + i * hour) })).error, 'at most 3');
+  const told = once(b.sock, 'connect-update');
+  assert.deepStrictEqual(await call(a.sock, 'connect-propose', { id, slots }), { ok: true });
+  assert.strictEqual((await told).kind, 'proposed');
+  const mine = await waitFor(a.sock, 'inbox', (p) => p.connects.waiting.some((x) => x.kind === 'times'));
+  assert.deepStrictEqual(mine.connects.waiting[0].proposal, { mine: true, slots });
+  const theirs = await waitFor(b.sock, 'inbox', (p) => p.connects.answer.some((x) => x.kind === 'times'));
+  assert.ok(!theirs.connects.ready.length, 'one group per person');
+
+  assert.ok((await call(a.sock, 'connect-pick', { id, slot: slots[0] })).error, 'you can’t pick your own proposal');
+  assert.ok((await call(b.sock, 'connect-pick', { id, slot: slots[0] + 1 })).error, 'only a proposed time');
+  const set = once(a.sock, 'connect-update');
+  assert.strictEqual((await call(b.sock, 'connect-pick', { id, slot: slots[1] })).meetingAt, slots[1]);
+  assert.strictEqual((await set).kind, 'scheduled');
+  const both = await Promise.all([a, b].map((x) => waitFor(x.sock, 'inbox', (p) => p.connects.scheduled.length)));
+  for (const p of both) assert.strictEqual(p.connects.scheduled[0].meetingAt, slots[1]);
+
+  // Starting soon: both get a reminder once.
+  db.prepare('UPDATE connect_requests SET meeting_at = ? WHERE id = ?').run(Date.now() + 60 * 1000, id);
+  const reminded = Promise.all([once(a.sock, 'meeting-soon'), once(b.sock, 'meeting-soon')]);
+  sendMeetingReminders();
+  const [ra] = await reminded;
+  assert.strictEqual(ra.accountId, b.user.id);
+  assert.strictEqual(db.prepare('SELECT reminded_at FROM connect_requests WHERE id = ?').get(id).reminded_at > 0, true);
+
+  // Cancel: back to "ready to talk".
+  await call(a.sock, 'connect-unschedule', { id });
+  await waitFor(b.sock, 'inbox', (p) => p.connects.ready.length && !p.connects.scheduled.length);
 });

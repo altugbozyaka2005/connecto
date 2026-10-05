@@ -177,40 +177,7 @@
 
     <!-- 2. Activity prompt -->
     <section class="screen" id="screen-activity">
-      <header class="topbar">
-        <a class="brand-sm" href="/" title="Back to the main page"><div class="logo logo-sm" aria-hidden="true"><span></span><span></span></div>Connecto</a>
-        <div class="topbar-actions">
-        <button class="btn btn-ghost inbox-btn" type="button" aria-label="Background search and requests" title="Background search & requests">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3a1.5 1.5 0 0 0-3 0v1.16A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>
-          <span class="badge inbox-badge" hidden></span>
-        </button>
-        <button class="btn btn-ghost bg-top-btn" type="button" aria-label="Background searches" title="Background searches">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z"/></svg>
-          <span class="bg-top-label">Background</span>
-          <span class="bg-top-dot" hidden></span>
-        </button>
-        <button class="btn btn-ghost friends-btn" type="button" aria-label="Friends">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5Z"/></svg>
-          <span class="friends-label">Friends</span>
-          <span class="badge friends-badge" hidden></span>
-        </button>
-        <details class="account">
-          <summary class="me-pill" aria-label="Account menu">
-            <div class="avatar avatar-sm me-avatar"></div>
-            <span class="me-name"></span>
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m7 10 5 5 5-5z"/></svg>
-          </summary>
-          <div class="menu">
-            <p class="menu-email"></p>
-            <button type="button" class="menu-item edit-profile-btn">Edit profile</button>
-            <button type="button" class="menu-item change-photo-btn">Change photo</button>
-            <button type="button" class="menu-item blocked-btn">Blocked people</button>
-            <a class="menu-item admin-link" href="/admin.html" hidden>Review reports</a>
-            <button type="button" class="menu-item logout-btn">Log out</button>
-          </div>
-        </details>
-        </div>
-      </header>
+      <header class="topbar" data-topbar></header>
       <main class="center-main">
         <div class="prompt-wrap">
           <p class="greeting" id="greeting"></p>
@@ -241,40 +208,7 @@
 
     <!-- 3. Matches -->
     <section class="screen" id="screen-matches">
-      <header class="topbar">
-        <a class="brand-sm" href="/" title="Back to the main page"><div class="logo logo-sm" aria-hidden="true"><span></span><span></span></div>Connecto</a>
-        <div class="topbar-actions">
-        <button class="btn btn-ghost inbox-btn" type="button" aria-label="Background search and requests" title="Background search & requests">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3a1.5 1.5 0 0 0-3 0v1.16A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>
-          <span class="badge inbox-badge" hidden></span>
-        </button>
-        <button class="btn btn-ghost bg-top-btn" type="button" aria-label="Background searches" title="Background searches">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z"/></svg>
-          <span class="bg-top-label">Background</span>
-          <span class="bg-top-dot" hidden></span>
-        </button>
-        <button class="btn btn-ghost friends-btn" type="button" aria-label="Friends">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5Z"/></svg>
-          <span class="friends-label">Friends</span>
-          <span class="badge friends-badge" hidden></span>
-        </button>
-        <details class="account">
-          <summary class="me-pill" aria-label="Account menu">
-            <div class="avatar avatar-sm me-avatar"></div>
-            <span class="me-name"></span>
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m7 10 5 5 5-5z"/></svg>
-          </summary>
-          <div class="menu">
-            <p class="menu-email"></p>
-            <button type="button" class="menu-item edit-profile-btn">Edit profile</button>
-            <button type="button" class="menu-item change-photo-btn">Change photo</button>
-            <button type="button" class="menu-item blocked-btn">Blocked people</button>
-            <a class="menu-item admin-link" href="/admin.html" hidden>Review reports</a>
-            <button type="button" class="menu-item logout-btn">Log out</button>
-          </div>
-        </details>
-        </div>
-      </header>
+      <header class="topbar" data-topbar></header>
 
       <main class="matches-main">
         <div class="status-card">
@@ -331,53 +265,94 @@
 
     <!-- 3b. Background searches -->
     <section class="screen" id="screen-background">
-      <header class="topbar">
-        <button class="btn btn-ghost bgp-back" id="bgp-back" type="button">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg>
-          Back
-        </button>
-        <a class="brand-sm" href="/" title="Back to the main page"><div class="logo logo-sm" aria-hidden="true"><span></span><span></span></div>Connecto</a>
-      </header>
+      <header class="topbar" data-topbar></header>
       <main class="bgp-main">
         <div class="bgp-hero">
           <div>
             <h2>Background searches</h2>
-            <p>They keep running after you close Connecto, alongside whatever you search live. Tap one to see its matches.</p>
+            <p>They keep running after you close Connecto, alongside whatever you search live. Tap a topic to see its matches.</p>
           </div>
           <button class="btn btn-primary" id="bgp-new" type="button">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
             New background search
           </button>
         </div>
-        <p class="bgp-summary" id="bgp-summary" hidden></p>
-
-        <section class="inbox-section" id="inbox-ready-section" hidden>
-          <p class="eyebrow">Ready to connect · you both said yes</p>
-          <ul class="people-list" id="inbox-ready"></ul>
-        </section>
-        <section class="inbox-section" id="inbox-incoming-section" hidden>
-          <p class="eyebrow">Want to connect with you</p>
-          <ul class="people-list" id="inbox-incoming"></ul>
-        </section>
-
-        <div class="bgs-list" id="bgs-list"></div>
+        <div class="bubbles" id="bg-bubbles" role="tablist" aria-label="Your background searches"></div>
         <div class="bgp-empty" id="bgp-empty" hidden>
           <h3>No background searches yet</h3>
-          <p>Start one, for example “playing chess”, and close the tab. People who want the same thing can find you and send a request, and you'll see it here when you're back.</p>
+          <p>Start one, for example “playing chess”, and close the tab. People who want the same thing can find you and send a request, and you'll see it in Connects when you're back.</p>
         </div>
-
-        <section class="inbox-section" id="inbox-outgoing-section" hidden>
-          <p class="eyebrow">Waiting for a reply</p>
-          <ul class="people-list" id="inbox-outgoing"></ul>
-        </section>
-        <section class="inbox-section" id="inbox-history-section" hidden>
-          <p class="eyebrow">Recently connected</p>
-          <ul class="people-list" id="inbox-history"></ul>
+        <section class="bg-panel" id="bg-panel" hidden>
+          <div class="bg-panel-head">
+            <div>
+              <h3 id="bg-panel-title"></h3>
+              <p id="bg-panel-detail"></p>
+            </div>
+            <div class="bg-panel-actions">
+              <button type="button" class="btn btn-ghost" id="bg-panel-edit">Edit</button>
+              <button type="button" class="btn btn-ghost bgp-stop" id="bg-panel-stop">Stop</button>
+            </div>
+          </div>
+          <div class="grid" id="bg-panel-grid"></div>
+          <p class="bgs-none" id="bg-panel-none" hidden>No matches yet. Anyone who starts a similar background search shows up here, and people searching live can find you and send a request.</p>
         </section>
         <label class="check bgp-notify">
           <input type="checkbox" id="bgp-notify" />
           <span>Email me when someone wants to connect (at most one every few hours)</span>
         </label>
+      </main>
+    </section>
+
+    <!-- 3c. Connects -->
+    <section class="screen" id="screen-connects">
+      <header class="topbar" data-topbar></header>
+      <main class="bgp-main">
+        <div class="bgp-hero">
+          <div>
+            <h2>Connects</h2>
+            <p>People you matched with through background searches. Accept, call when you're both online, or set a time to meet.</p>
+          </div>
+        </div>
+        <p class="bgp-summary" id="connects-summary" hidden></p>
+        <section class="cx-section" data-group="answer" hidden>
+          <h3>Needs your answer <span class="cx-n"></span></h3>
+          <div class="grid cx-grid"></div>
+        </section>
+        <section class="cx-section" data-group="scheduled" hidden>
+          <h3>Scheduled <span class="cx-n"></span></h3>
+          <div class="grid cx-grid"></div>
+        </section>
+        <section class="cx-section" data-group="ready" hidden>
+          <h3>Ready to talk <span class="cx-n"></span></h3>
+          <div class="grid cx-grid"></div>
+        </section>
+        <section class="cx-section" data-group="waiting" hidden>
+          <h3>Waiting on them <span class="cx-n"></span></h3>
+          <div class="grid cx-grid"></div>
+        </section>
+        <section class="cx-section" data-group="recent" hidden>
+          <h3>Talked recently <span class="cx-n"></span></h3>
+          <div class="grid cx-grid"></div>
+        </section>
+        <div class="bgp-empty" id="connects-empty" hidden>
+          <h3>No connects yet</h3>
+          <p>When someone you matched with in the background sends you a request, or accepts yours, they show up here.</p>
+          <button type="button" class="btn btn-primary" data-page="background">Go to Background searches</button>
+        </div>
+      </main>
+    </section>
+
+    <!-- 3d. Friends -->
+    <section class="screen" id="screen-friends">
+      <header class="topbar" data-topbar></header>
+      <main class="bgp-main">
+        <div class="bgp-hero">
+          <div>
+            <h2>Friends</h2>
+            <p>See who's online and what they're doing, and invite them to a call.</p>
+          </div>
+        </div>
+        <div class="friends-view" id="friends-page"></div>
       </main>
     </section>
 
@@ -456,6 +431,68 @@
 
   <!-- Incoming requests / notices -->
   <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <template id="topbar-tpl">
+    <header class="topbar">
+        <a class="brand-sm" href="/" title="Back to the main page"><div class="logo logo-sm" aria-hidden="true"><span></span><span></span></div>Connecto</a>
+        <div class="topbar-actions">
+        <nav class="topnav" aria-label="Pages">
+          <button class="btn btn-ghost nav-btn" type="button" data-page="connects">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-2.67 0-8 1.34-8 4v3h11.5a6.5 6.5 0 0 1 2.18-6.07C13.07 13.32 10.8 13 9 13Zm8.5 0a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Zm-.75 6.6-2.4-2.4 1.06-1.06 1.34 1.34 2.84-2.84 1.06 1.06-3.9 3.9Z"/></svg>
+            <span class="nav-label">Connects</span>
+            <span class="badge connects-badge" hidden></span>
+          </button>
+          <button class="btn btn-ghost nav-btn bg-top-btn" type="button" data-page="background">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z"/></svg>
+            <span class="nav-label">Background</span>
+            <span class="bg-top-dot" hidden></span>
+          </button>
+          <button class="btn btn-ghost nav-btn" type="button" data-page="friends">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5Z"/></svg>
+            <span class="nav-label">Friends</span>
+            <span class="badge friends-badge" hidden></span>
+          </button>
+        </nav>
+        <details class="account">
+          <summary class="me-pill" aria-label="Account menu">
+            <div class="avatar avatar-sm me-avatar"></div>
+            <span class="me-name"></span>
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m7 10 5 5 5-5z"/></svg>
+          </summary>
+          <div class="menu">
+            <p class="menu-email"></p>
+            <button type="button" class="menu-item edit-profile-btn">Edit profile</button>
+            <button type="button" class="menu-item change-photo-btn">Change photo</button>
+            <button type="button" class="menu-item blocked-btn">Blocked people</button>
+            <a class="menu-item admin-link" href="/admin.html" hidden>Review reports</a>
+            <button type="button" class="menu-item logout-btn">Log out</button>
+          </div>
+        </details>
+        </div>
+      </header>
+  </template>
+
+  <template id="friends-view-tpl">
+    <section class="friend-requests-section" hidden>
+      <p class="eyebrow">Wants to be friends</p>
+      <ul class="people-list friend-requests"></ul>
+    </section>
+    <ul class="people-list friend-list"></ul>
+    <p class="form-intro friends-empty" hidden>No friends yet. After a call, tap <strong>Add friend</strong>. If they do too, you'll find them here next time and can call them directly.</p>
+  </template>
+
+  <!-- Propose times to meet a connection -->
+  <dialog class="dialog dialog-sm" id="propose-dialog" aria-labelledby="propose-title">
+    <h3 id="propose-title">Propose a time</h3>
+    <p class="form-intro" id="propose-intro"></p>
+    <div class="slots" id="propose-slots"></div>
+    <button type="button" class="link-btn link-accent" id="propose-add">+ Add another time</button>
+    <p class="form-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+      <button type="button" class="btn btn-primary" id="propose-go">Send</button>
+    </div>
+  </dialog>
 
   <template id="match-card-tpl">
     <article class="match-card">
@@ -658,12 +695,7 @@
   <dialog class="dialog" id="friends-dialog" aria-labelledby="friends-title">
     <h3 id="friends-title">Friends</h3>
     <p class="form-intro" id="friends-call-note" hidden></p>
-    <section id="friend-requests-section" hidden>
-      <p class="eyebrow">Wants to be friends</p>
-      <ul class="people-list" id="friend-requests"></ul>
-    </section>
-    <ul class="people-list" id="friend-list"></ul>
-    <p class="form-intro" id="friends-empty" hidden>No friends yet. After a call, tap <strong>Add friend</strong>. If they do too, you'll find them here next time and can call them directly.</p>
+    <div class="friends-view" id="friends-dialog-view"></div>
     <div class="dialog-actions">
       <button type="button" class="btn btn-ghost" data-close>Close</button>
     </div>

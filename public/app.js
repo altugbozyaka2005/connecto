@@ -4,6 +4,12 @@
   // Connects only once signed in; the server rejects sockets without a session.
   const socket = io({ autoConnect: false });
 
+  // One top bar (logo, Connects / Background / Friends, account menu) shared by the main pages,
+  // and one friends block shared by the Friends page and the in-call friends dialog.
+  document.querySelectorAll('[data-topbar]').forEach((h) => h.replaceWith($('#topbar-tpl').content.firstElementChild.cloneNode(true)));
+  document.querySelectorAll('.friends-view').forEach((v) => v.append($('#friends-view-tpl').content.cloneNode(true)));
+  const PAGES = { connects: 'screen-connects', background: 'screen-background', friends: 'screen-friends' };
+
   const state = {
     user: null, // own account, from /api/auth/me
     pendingAvatar: null, // photo chosen on the sign-up form
@@ -22,9 +28,15 @@
   // ---------- Helpers ----------
 
   function show(screenId) {
-    // Leaving the Background searches page some other way (a call, signing out): drop its #background URL.
-    if (screenId !== 'screen-background' && location.hash === '#background') history.replaceState(null, '', location.pathname + location.search);
+    const page = Object.keys(PAGES).find((k) => PAGES[k] === screenId);
+    // Leaving a page some other way (a call, the logo, signing out): drop its #page URL.
+    if (!page && PAGES[location.hash.slice(1)]) history.replaceState(null, '', location.pathname + location.search);
     document.querySelectorAll('.screen').forEach((s) => s.toggleAttribute('data-active', s.id === screenId));
+    // Highlight the current page in the top menu.
+    document.querySelectorAll('.nav-btn').forEach((b) => {
+      if (b.dataset.page === page) b.setAttribute('aria-current', 'page');
+      else b.removeAttribute('aria-current');
+    });
     window.scrollTo(0, 0);
   }
 
@@ -172,11 +184,12 @@
         .catch(() => {});
     }
     $('#activity-input').value = state.activity;
-    // A link or reload to /#background opens that page.
-    if (location.hash === '#background') {
+    // A link or reload to /#connects, /#background or /#friends opens that page.
+    const page = location.hash.slice(1);
+    if (PAGES[page]) {
       show('screen-activity');
       history.replaceState(null, '', location.pathname);
-      return openBgPage();
+      return openPage(page);
     }
     show('screen-activity');
     $('#activity-input').focus();
@@ -1218,9 +1231,20 @@
       b.hidden = !requests.length;
     });
 
-    const reqList = $('#friend-requests');
+    const note = $('#friends-call-note');
+    note.hidden = !state.room;
+    if (state.room) {
+      note.textContent = state.room.isHost || !state.room.hostId
+        ? 'Invite friends to this call. As the host, anyone you invite joins as soon as they accept.'
+        : 'Invite friends to this call. You’re not the host, so the host approves anyone you invite.';
+    }
+    document.querySelectorAll('.friends-view').forEach((view) => fillFriends(view, friends, requests));
+  }
+
+  function fillFriends(view, friends, requests) {
+    const reqList = view.querySelector('.friend-requests');
     reqList.textContent = '';
-    $('#friend-requests-section').hidden = !requests.length;
+    view.querySelector('.friend-requests-section').hidden = !requests.length;
     for (const r of requests) {
       const { li } = personRow(r);
       li.append(
@@ -1233,16 +1257,9 @@
       reqList.append(li);
     }
 
-    const note = $('#friends-call-note');
-    note.hidden = !state.room;
-    if (state.room) {
-      note.textContent = state.room.isHost || !state.room.hostId
-        ? 'Invite friends to this call. As the host, anyone you invite joins as soon as they accept.'
-        : 'Invite friends to this call. You’re not the host, so the host approves anyone you invite.';
-    }
-    const list = $('#friend-list');
+    const list = view.querySelector('.friend-list');
     list.textContent = '';
-    $('#friends-empty').hidden = friends.length > 0 || requests.length > 0;
+    view.querySelector('.friends-empty').hidden = friends.length > 0 || requests.length > 0;
     for (const f of friends) {
       const { li, who } = personRow(f, 'presence');
       const line = document.createElement('span');
@@ -1266,7 +1283,7 @@
               timeout: 3500,
             });
           }
-          $('#friends-dialog').close();
+          if ($('#friends-dialog').open) $('#friends-dialog').close();
         });
         li.append(invite);
       }
@@ -1306,7 +1323,7 @@
     toast({ title: `You and ${name} are now friends 🎉`, body: 'Find them anytime under Friends.' });
   });
 
-  document.querySelectorAll('.friends-btn, .room-friends-btn').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('.room-friends-btn').forEach((b) => b.addEventListener('click', () => {
     renderFriends();
     openDialog('#friends-dialog');
   }));
@@ -1404,12 +1421,57 @@
   socket.on('room-invite-expired', ({ roomId }) => { dismiss(roomInviteToasts.get(roomId)); roomInviteToasts.delete(roomId); });
   socket.on('room-invite-declined', ({ name }) => toast({ title: `${name} can’t join right now`, timeout: 3000 }));
 
-  // ---------- Background searches page ----------
+  // ---------- Pages: Connects, Background, Friends ----------
 
-  state.inbox = { searches: [], maxSearches: 3, incoming: [], outgoing: [], ready: [], history: [], notifyEmail: true };
+  // Each page gets a #name URL, so the browser's back button leaves it.
+  let pageReturnTo = 'screen-activity';
+  const pageScreens = Object.values(PAGES);
+
+  function openPage(name) {
+    if (!PAGES[name] || state.room) return;
+    const current = document.querySelector('.screen[data-active]')?.id;
+    const fromPage = pageScreens.includes(current);
+    if (!fromPage) pageReturnTo = current === 'screen-matches' ? 'screen-matches' : 'screen-activity';
+    if (location.hash !== `#${name}`) {
+      if (fromPage) history.replaceState({ page: name }, '', `#${name}`);
+      else history.pushState({ page: name }, '', `#${name}`);
+    }
+    renderPage(name);
+    show(PAGES[name]);
+  }
+
+  function renderPage(name) {
+    if (name === 'background') renderBgPage();
+    else if (name === 'connects') renderConnects();
+    else if (name === 'friends') renderFriends();
+  }
+
+  window.addEventListener('popstate', () => {
+    const name = location.hash.slice(1);
+    if (PAGES[name] && state.user?.emailVerified && !state.room) {
+      renderPage(name);
+      show(PAGES[name]);
+    } else if (pageScreens.includes(document.querySelector('.screen[data-active]')?.id)) {
+      show(pageReturnTo);
+    }
+  });
+
+  // Top menu buttons (and any other [data-page] button) open their page.
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-page]');
+    if (!b) return;
+    closeMenus();
+    openPage(b.dataset.page);
+  });
+
+  // ---------- Background searches ----------
+
+  state.inbox = {
+    searches: [], maxSearches: 3, maxSlots: 3, notifyEmail: true,
+    connects: { answer: [], ready: [], scheduled: [], waiting: [], recent: [] },
+  };
   let shownAwaySummary = false;
-  const openSearches = new Set(); // ids of searches expanded on the page
-  let bgReturnTo = 'screen-activity';
+  let selectedSearch = null; // the topic bubble that's open
   let editingSearch = null; // search being edited in the dialog (null = new)
 
   function untilText(ms) {
@@ -1421,33 +1483,32 @@
   const short = (t, n = 28) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const allMatches = () => state.inbox.searches.flatMap((x) => x.matches);
+  const matchedPeople = () => new Set(allMatches().map((m) => m.person.id)).size;
 
-  // The entry button on the main screen and the status button on the matches screen.
+  // The entry card on the main screen, the Background button's count, and the matches screen button.
   function renderBgControls() {
-    const { searches, incoming, ready } = state.inbox;
-    const total = new Set(allMatches().map((m) => m.person.id)).size;
+    const { searches } = state.inbox;
+    const total = matchedPeople();
     $('#bg-entry').toggleAttribute('data-on', !!searches.length);
     $('#bg-entry-sub').textContent = !searches.length
       ? 'Keep looking after you close the tab'
       : searches.length === 1
         ? `“${short(searches[0].activity, 32)}” · ${plural(searches[0].matches.length, 'match', 'matches')}`
         : `${searches.length} running · ${plural(total, 'match', 'matches')}`;
-    const urgent = incoming.length + ready.filter((r) => r.available).length + allMatches().filter((m) => m.new).length;
-    $('#bg-entry-badge').textContent = urgent;
-    $('#bg-entry-badge').hidden = !urgent;
+    const fresh = new Set(allMatches().filter((m) => m.new).map((m) => m.person.id)).size;
+    $('#bg-entry-badge').textContent = fresh;
+    $('#bg-entry-badge').hidden = !fresh;
 
-    // Top bar button: a green dot while any background search is running.
+    // Top menu: a green dot while a search runs, with the number of people matched once there are any.
     document.querySelectorAll('.bg-top-btn').forEach((b) => {
-      b.toggleAttribute('data-on', !!searches.length);
-      // Running: a green dot, with the number of people matched once there are any.
       const dot = b.querySelector('.bg-top-dot');
       dot.hidden = !searches.length;
       dot.textContent = total ? (total > 99 ? '99+' : total) : '';
       dot.toggleAttribute('data-count', !!total);
       b.title = !searches.length ? 'Background searches'
         : `Background searches · ${searches.length} running · ${plural(total, 'person', 'people')} matched`;
-      b.setAttribute('aria-label', b.title);
     });
+
     const btn = $('#bg-btn');
     btn.toggleAttribute('data-on', !!searches.length);
     $('#bg-btn-label').textContent = searches.length ? `Background searches (${searches.length})` : 'Search in background';
@@ -1456,27 +1517,6 @@
     $('#bg-empty-btn').hidden = covered;
     $('#bg-empty-hint').hidden = covered;
   }
-
-  // A page of its own: it gets a #background URL so the browser's back button leaves it.
-  function openBgPage() {
-    const current = document.querySelector('.screen[data-active]')?.id;
-    if (current !== 'screen-background') {
-      bgReturnTo = current === 'screen-matches' ? 'screen-matches' : 'screen-activity';
-      if (location.hash !== '#background') history.pushState({ page: 'background' }, '', '#background');
-    }
-    renderInbox();
-    show('screen-background');
-  }
-
-  function leaveBgPage() {
-    if (location.hash === '#background') history.back();
-    else show(bgReturnTo);
-  }
-  window.addEventListener('popstate', () => {
-    if (location.hash === '#background' && state.user?.emailVerified && !state.room) openBgPage();
-    else if (document.querySelector('#screen-background[data-active]')) show(bgReturnTo);
-  });
-  $('#bgp-back').addEventListener('click', leaveBgPage);
 
   // New search (prefilled with what you're doing live) or editing one of yours.
   function openBgDialog(search = null) {
@@ -1492,10 +1532,9 @@
     openDialog('#bg-dialog');
     $('#bg-activity').focus();
   }
-  $('#bg-entry').addEventListener('click', openBgPage);
-  $('#bg-btn').addEventListener('click', () => (state.inbox.searches.length ? openBgPage() : openBgDialog()));
+  $('#bg-entry').addEventListener('click', () => openPage('background'));
+  $('#bg-btn').addEventListener('click', () => (state.inbox.searches.length ? openPage('background') : openBgDialog()));
   $('#bg-empty-btn').addEventListener('click', () => openBgDialog());
-  document.querySelectorAll('.bg-top-btn').forEach((b) => b.addEventListener('click', openBgPage));
   $('#bgp-new').addEventListener('click', () => {
     if (state.inbox.searches.length >= state.inbox.maxSearches) {
       return toast({ title: `You can run up to ${state.inbox.maxSearches} background searches`, body: 'Stop one to start another.' });
@@ -1512,19 +1551,26 @@
     });
     if (res.error) { $('#bg-dialog .form-error').textContent = res.error; return; }
     $('#bg-dialog').close();
-    openSearches.add(res.id);
+    selectedSearch = res.id;
     toast({
       title: editingSearch ? 'Background search updated' : 'Background search on',
       body: `Looking for “${res.activity}” until ${untilText(res.expiresAt)}, even after you close Connecto.`,
-      actions: document.querySelector('#screen-background[data-active]') ? undefined : [{ label: 'View', cls: 'btn-primary', onClick: (el) => { dismiss(el); openBgPage(); } }],
+      actions: document.querySelector('#screen-background[data-active]') ? undefined : [{ label: 'View', cls: 'btn-primary', onClick: (el) => { dismiss(el); openPage('background'); } }],
     });
   });
+  async function stopSearch(search) {
+    await emit('bg-stop', { id: search.id });
+    toast({ title: 'Background search stopped', body: `“${short(search.activity, 40)}”`, timeout: 2500 });
+  }
   $('#bg-stop').addEventListener('click', async () => {
-    if (editingSearch) await emit('bg-stop', { id: editingSearch.id });
+    if (editingSearch) await stopSearch(editingSearch);
     $('#bg-dialog').close();
-    toast({ title: 'Background search stopped', timeout: 2500 });
   });
   $('#bg-notify').addEventListener('change', (e) => { if (state.inbox.searches.length) emit('notify-email', { on: e.target.checked }); });
+
+  const currentSearch = () => state.inbox.searches.find((x) => x.id === selectedSearch);
+  $('#bg-panel-edit').addEventListener('click', () => currentSearch() && openBgDialog(currentSearch()));
+  $('#bg-panel-stop').addEventListener('click', () => currentSearch() && stopSearch(currentSearch()));
 
   function statusLine(p) {
     return { searching: 'Online now', online: 'Online now', 'in-call': 'In a call', offline: 'Offline' }[p.status] || '';
@@ -1544,29 +1590,8 @@
     return tag;
   };
 
-  // A person with a line under their name, flagged NEW when it happened since your last visit.
-  function inboxRow(p, line, isNew) {
-    const { li, who } = personRow({ ...p, status: p.status }, 'presence');
-    if (isNew) who.firstChild.append(newTag());
-    const span = document.createElement('span');
-    span.textContent = line;
-    who.append(span);
-    return li;
-  }
-
-  async function callBack(person) {
-    const res = await emit('connect-call', { accountId: person.id });
-    if (res.error) return toast({ title: 'Couldn’t call', body: res.error });
-    if (!res.matched) toast({ title: `Calling ${person.name}…`, body: 'You’ll join as soon as they pick up.', timeout: 3500 });
-  }
-
-  async function acceptConnect(id, person) {
-    const res = await emit('connect-respond', { id, accept: true });
-    if (res.error) toast({ title: 'Couldn’t accept', body: res.error });
-    else toast({ title: `You and ${person.name} both want to connect 🎉`, body: person.status === 'offline' ? 'We’ll let them know. Call when you’re both online.' : 'They’re online now. Tap Call now.' });
-  }
-
-  // A background match, drawn like a live match card; the card's action depends on the request state.
+  // A background match, drawn like a live match card. People you're already in touch with
+  // get a link to Connects instead of a second set of buttons.
   function bgMatchCard(m, search) {
     const p = m.person;
     const card = personCard({ ...p, activity: m.activity, score: m.score, interests: p.interests || [] });
@@ -1579,19 +1604,11 @@
     card.querySelector('.card-more').hidden = true;
     const cta = card.querySelector('.match-cta');
     delete card.dataset.state;
-    let action = null;
-    if (m.request === 'ready') {
-      card.dataset.state = 'requested-you';
-      const canCall = m.available && !state.room;
-      cta.textContent = canCall ? 'You both said yes · call now →' : 'You both said yes · call when they’re online';
-      if (canCall) action = () => callBack(p);
-    } else if (m.request === 'incoming') {
-      card.dataset.state = 'requested-you';
-      cta.textContent = 'Wants to connect · accept →';
-      action = () => acceptConnect(m.requestId, p);
-    } else if (m.request === 'sent') {
-      card.dataset.state = 'requested';
-      cta.textContent = 'Request sent ✓';
+    let action;
+    if (m.request) {
+      card.dataset.state = 'connected';
+      cta.textContent = '✓ In Connects →';
+      action = () => openPage('connects');
     } else {
       cta.textContent = p.status === 'offline' ? 'Send request · they’ll see it later' : 'Send request →';
       action = async () => {
@@ -1604,163 +1621,336 @@
     const fresh = hit.cloneNode(false); // drop the live-match click handler
     hit.replaceWith(fresh);
     fresh.setAttribute('aria-label', `${cta.textContent}: ${p.name}, ${m.activity}`);
-    if (action) fresh.addEventListener('click', action);
-    else card.dataset.inert = '';
+    fresh.addEventListener('click', action);
     return card;
   }
 
-  // One background search: a header you tap to show or hide its matches.
-  function searchCard(search) {
-    const card = document.createElement('article');
-    card.className = 'bgs';
-    const open = openSearches.has(search.id);
-    card.toggleAttribute('data-open', open);
-
-    const head = document.createElement('button');
-    head.type = 'button';
-    head.className = 'bgs-head';
-    head.setAttribute('aria-expanded', String(open));
-    const dot = document.createElement('span');
-    dot.className = 'bgp-dot';
-    const title = document.createElement('span');
-    title.className = 'bgs-title';
-    const strong = document.createElement('strong');
-    strong.textContent = `“${search.activity}”`;
-    const sub = document.createElement('span');
-    sub.textContent = `Background search · ${timeLeft(search.expiresAt)}`;
-    title.append(strong, sub);
-    const count = document.createElement('span');
-    count.className = 'bgs-count';
-    count.dataset.zero = String(!search.matches.length);
-    count.textContent = plural(search.matches.length, 'match', 'matches');
-    const fresh = search.matches.filter((m) => m.new).length;
-    if (fresh) count.prepend(newTag());
-    const chev = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    chev.setAttribute('viewBox', '0 0 24 24');
-    chev.setAttribute('class', 'bgs-chev');
-    chev.innerHTML = '<path fill="currentColor" d="m7 10 5 5 5-5z"/>';
-    head.append(dot, title, count, chev);
-    head.addEventListener('click', () => {
-      if (openSearches.has(search.id)) openSearches.delete(search.id);
-      else openSearches.add(search.id);
-      const now = openSearches.has(search.id);
-      card.toggleAttribute('data-open', now);
-      head.setAttribute('aria-expanded', String(now));
-    });
-
-    const body = document.createElement('div');
-    body.className = 'bgs-body';
-    if (search.matches.length) {
-      const grid = document.createElement('div');
-      grid.className = 'grid bgs-grid';
-      for (const m of search.matches) grid.append(bgMatchCard(m, search));
-      body.append(grid);
-    } else {
-      const p = document.createElement('p');
-      p.className = 'bgs-none';
-      p.textContent = 'No matches yet. Anyone who starts a similar background search shows up here, and people searching live can find you and send a request.';
-      body.append(p);
+  // One bubble per search topic; the selected one shows its matches below.
+  function renderBgPage() {
+    const { searches } = state.inbox;
+    if (!searches.some((x) => x.id === selectedSearch)) selectedSearch = searches[0]?.id ?? null;
+    const box = $('#bg-bubbles');
+    box.textContent = '';
+    for (const x of searches) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'bubble';
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', String(x.id === selectedSearch));
+      const dot = document.createElement('span');
+      dot.className = 'bgp-dot';
+      const label = document.createElement('span');
+      label.className = 'bubble-label';
+      label.textContent = x.activity;
+      const count = document.createElement('span');
+      count.className = 'bubble-count';
+      count.textContent = x.matches.length;
+      count.title = plural(x.matches.length, 'match', 'matches');
+      b.append(dot, label, count);
+      if (x.matches.some((m) => m.new)) b.append(newTag());
+      b.addEventListener('click', () => { selectedSearch = x.id; renderBgPage(); });
+      box.append(b);
     }
-    const foot = document.createElement('div');
-    foot.className = 'bgs-foot';
-    const when = document.createElement('span');
-    when.textContent = `Started ${ago(search.startedAt)} · until ${untilText(search.expiresAt)}`;
-    const stopBtn = button('Stop', 'btn btn-ghost bgp-stop', async () => {
-      await emit('bg-stop', { id: search.id });
-      toast({ title: 'Background search stopped', body: `“${short(search.activity, 40)}”`, timeout: 2500 });
-    });
-    foot.append(when, button('Edit', 'btn btn-ghost', () => openBgDialog(search)), stopBtn);
-    body.append(foot);
+    box.hidden = !searches.length;
+    $('#bgp-empty').hidden = !!searches.length;
+    $('#bgp-notify').checked = !!state.inbox.notifyEmail;
 
-    card.append(head, body);
+    const x = currentSearch();
+    $('#bg-panel').hidden = !x;
+    if (!x) return;
+    $('#bg-panel-title').textContent = `“${x.activity}”`;
+    $('#bg-panel-detail').textContent = `${plural(x.matches.length, 'match', 'matches')} · started ${ago(x.startedAt)} · until ${untilText(x.expiresAt)} (${timeLeft(x.expiresAt)})`;
+    const grid = $('#bg-panel-grid');
+    grid.textContent = '';
+    for (const m of x.matches) grid.append(bgMatchCard(m, x));
+    $('#bg-panel-none').hidden = !!x.matches.length;
+  }
+
+  // ---------- Connects ----------
+
+  const GROUPS = ['answer', 'scheduled', 'ready', 'waiting', 'recent'];
+  const JOIN_EARLY_MS = 10 * 60 * 1000;
+
+  // "Tue, Oct 7, 7:00 PM (9:00 PM their time)"
+  function whenText(ms, p) {
+    const d = new Date(ms);
+    const mine = d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    if (!p?.timezone || p.timezone === MY_TZ) return mine;
+    try {
+      return `${mine} (${new Intl.DateTimeFormat([], { timeZone: p.timezone, hour: 'numeric', minute: '2-digit' }).format(d)} their time)`;
+    } catch {
+      return mine;
+    }
+  }
+
+  function inText(ms) {
+    const min = Math.round((ms - Date.now()) / 60000);
+    if (min <= 0) return 'now';
+    if (min < 60) return `in ${min} min`;
+    const h = Math.round(min / 60);
+    return h < 48 ? `in ${h}h` : `in ${Math.round(h / 24)} days`;
+  }
+
+  const connectsUrgent = () => {
+    const cx = state.inbox.connects;
+    return cx.answer.length + cx.ready.filter((r) => r.available).length
+      + cx.scheduled.filter((r) => r.meetingAt - Date.now() < JOIN_EARLY_MS).length;
+  };
+
+  async function callBack(person, joining = false) {
+    const res = await emit('connect-call', { accountId: person.id });
+    if (res.error) {
+      if (joining && /not online/.test(res.error)) {
+        return toast({ title: `${person.name} isn’t here yet`, body: 'Keep Connecto open. You’ll get a call as soon as they tap Join.', timeout: 6000 });
+      }
+      return toast({ title: 'Couldn’t call', body: res.error });
+    }
+    if (!res.matched) toast({ title: `Calling ${person.name}…`, body: 'You’ll join as soon as they pick up.', timeout: 3500 });
+  }
+
+  async function acceptConnect(id, person) {
+    const res = await emit('connect-respond', { id, accept: true });
+    if (res.error) toast({ title: 'Couldn’t accept', body: res.error });
+    else toast({ title: `You and ${person.name} both want to connect 🎉`, body: person.status === 'offline' ? 'They’re offline. Propose a time under Ready to talk.' : 'They’re online now. Tap Call now.' });
+  }
+
+  // A connect, drawn like a match card, with the buttons for its group.
+  function connectCard(it, group) {
+    const p = it.person;
+    const card = $('#match-card-tpl').content.firstElementChild.cloneNode(true);
+    card.classList.add('cx-card');
+    card.dataset.group = group;
+    card.querySelector('.match-hit').remove();
+    card.querySelector('.card-more').remove();
+    const av = card.querySelector('.avatar');
+    paintAvatar(av, p.name, p.avatar);
+    av.classList.add('presence');
+    av.dataset.status = p.status;
+    card.querySelector('.name-text').textContent = p.name;
+    card.querySelector('.pill-friend').hidden = !it.friend;
+    if (it.new) card.querySelector('.match-name').append(newTag());
+    card.querySelector('.match-meta').textContent = [statusLine(p), metaLine(p)].filter(Boolean).join(' · ');
+    card.querySelector('.match-activity').textContent = `“${it.activity}”`;
+    card.querySelector('.match-bio').textContent = p.bio || '';
+    const chips = card.querySelector('.mini-chips');
+    for (const i of p.interests || []) {
+      const c = document.createElement('span');
+      c.className = 'mini-chip';
+      c.textContent = i;
+      chips.append(c);
+    }
+
+    const note = document.createElement('p');
+    note.className = 'cx-note';
+    const foot = card.querySelector('.match-foot');
+    foot.textContent = '';
+    foot.className = 'cx-actions';
+    const add = (...btns) => foot.append(...btns);
+    const propose = (label, cls) => button(label, cls, () => openPropose(it));
+    const unschedule = (label) => button(label, 'btn btn-ghost bgp-stop', () => emit('connect-unschedule', { id: it.id }));
+
+    if (group === 'answer' && it.kind === 'request') {
+      note.textContent = `Wants to connect · ${ago(it.at)}`;
+      add(
+        button('Decline', 'btn btn-ghost', () => emit('connect-respond', { id: it.id, accept: false })),
+        button('Accept', 'btn btn-good', () => acceptConnect(it.id, p)),
+      );
+    } else if (group === 'answer') {
+      note.textContent = `${p.name} suggested ${it.proposal.slots.length === 1 ? 'a time' : 'some times'}. Pick one:`;
+      const slots = document.createElement('div');
+      slots.className = 'cx-slots';
+      for (const t of it.proposal.slots) {
+        slots.append(button(whenText(t, p), 'btn btn-good slot-btn', async () => {
+          const res = await emit('connect-pick', { id: it.id, slot: t });
+          if (res.error) toast({ title: 'Couldn’t pick that time', body: res.error });
+          else toast({ title: `Meeting set with ${p.name} 📅`, body: `${whenText(t, p)}. We’ll remind you both 10 minutes before.` });
+        }));
+      }
+      card.querySelector('.match-info').append(note, slots);
+      add(propose('Suggest another time', 'btn btn-ghost'));
+    } else if (group === 'ready') {
+      note.textContent = it.available ? 'You both said yes · online now' : `You both said yes · ${p.name} is offline`;
+      if (it.available) {
+        const call = button('Call now', 'btn btn-primary', () => callBack(p));
+        call.disabled = !!state.room;
+        add(call, propose('Propose a time', 'btn btn-ghost'));
+      } else {
+        add(propose('Propose a time', 'btn btn-primary'));
+      }
+    } else if (group === 'scheduled') {
+      note.classList.add('cx-when');
+      note.textContent = `📅 ${whenText(it.meetingAt, p)} · ${inText(it.meetingAt)}`;
+      const open = it.meetingAt - Date.now() < JOIN_EARLY_MS;
+      const join = button(open ? 'Join' : 'Join opens 10 min before', open ? 'btn btn-good' : 'btn btn-ghost', () => callBack(p, true));
+      join.disabled = !open || !!state.room;
+      add(join, propose('Reschedule', 'btn btn-ghost'), unschedule('Cancel'));
+    } else if (group === 'waiting' && it.kind === 'request') {
+      note.textContent = `Request sent ${ago(it.at)}`;
+      add(button('Cancel request', 'btn btn-ghost', () => emit('connect-cancel', { id: it.id })));
+    } else if (group === 'waiting') {
+      note.textContent = `You proposed: ${it.proposal.slots.map((t) => whenText(t, p)).join(' · ')}`;
+      add(propose('Change times', 'btn btn-ghost'), unschedule('Withdraw'));
+    } else {
+      note.textContent = `Talked ${ago(it.at)}`;
+      if (it.friend) {
+        const f = button('Friends ✓', 'btn btn-ghost', null);
+        f.disabled = true;
+        add(f);
+      } else {
+        add(button('Add friend', 'btn btn-ghost', async (e) => {
+          e.currentTarget.disabled = true;
+          const res = await emit('friend-request', { accountId: p.id });
+          if (res.error) return toast({ title: 'Couldn’t add friend', body: res.error });
+          toast(res.status === 'friends'
+            ? { title: `You and ${p.name} are now friends 🎉` }
+            : { title: 'Friend request sent', body: `If ${p.name} adds you too, you’ll be friends.`, timeout: 3000 });
+        }));
+      }
+      add(button('Call again', 'btn btn-primary', async () => {
+        if (it.friend && it.available) {
+          const res = await emit('friend-invite', { id: p.id });
+          if (res.error) return toast({ title: 'Couldn’t call', body: res.error });
+          if (!res.matched) toast({ title: `Calling ${p.name}…`, body: 'You’ll join as soon as they accept.', timeout: 3500 });
+          return;
+        }
+        const res = await emit('connect-request', { accountId: p.id });
+        if (res.error) return toast({ title: 'Couldn’t send request', body: res.error });
+        toast({ title: `Asked ${p.name} to talk again`, body: 'They’ll see it under Connects.', timeout: 3500 });
+      }));
+    }
+    if (!note.parentNode) card.querySelector('.match-info').append(note);
     return card;
+  }
+
+  function renderConnects() {
+    const cx = state.inbox.connects;
+    for (const g of GROUPS) {
+      const sec = document.querySelector(`.cx-section[data-group="${g}"]`);
+      sec.hidden = !cx[g].length;
+      sec.querySelector('.cx-n').textContent = cx[g].length;
+      const grid = sec.querySelector('.cx-grid');
+      grid.textContent = '';
+      for (const it of cx[g]) grid.append(connectCard(it, g));
+    }
+    $('#connects-empty').hidden = GROUPS.some((g) => cx[g].length);
+    // What happened since the last visit
+    const requests = cx.answer.filter((r) => r.new && r.kind === 'request').length;
+    const times = cx.answer.filter((r) => r.new && r.kind === 'times').length;
+    const accepted = cx.ready.filter((r) => r.new).length;
+    const parts = [
+      requests && plural(requests, 'new request', 'new requests'),
+      accepted && `${accepted} accepted`,
+      times && `${plural(times, 'time suggestion', 'time suggestions')}`,
+    ].filter(Boolean);
+    $('#connects-summary').hidden = !parts.length;
+    $('#connects-summary').textContent = parts.length ? `While you were away: ${parts.join(' · ')}` : '';
+  }
+
+  // Countdowns and the Join button move with the clock.
+  setInterval(() => {
+    renderBadges();
+    if (document.querySelector('#screen-connects[data-active]')) renderConnects();
+  }, 30 * 1000);
+
+  // ---------- Propose a time ----------
+
+  let proposing = null;
+  const toLocalInput = (ms) => new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+  function addSlot(ms) {
+    const row = document.createElement('div');
+    row.className = 'slot-row';
+    const input = document.createElement('input');
+    input.type = 'datetime-local';
+    input.min = toLocalInput(Date.now());
+    input.value = toLocalInput(ms);
+    const hint = document.createElement('span');
+    hint.className = 'slot-hint';
+    const update = () => {
+      const t = new Date(input.value).getTime();
+      hint.textContent = Number.isFinite(t) && proposing ? whenText(t, proposing.person) : '';
+    };
+    input.addEventListener('input', update);
+    const remove = button('✕', 'icon-btn', () => { row.remove(); renderSlotControls(); });
+    remove.setAttribute('aria-label', 'Remove this time');
+    row.append(input, remove, hint);
+    $('#propose-slots').append(row);
+    update();
+    renderSlotControls();
+  }
+
+  function renderSlotControls() {
+    const rows = $('#propose-slots').children;
+    $('#propose-add').hidden = rows.length >= state.inbox.maxSlots;
+    for (const r of rows) r.querySelector('.icon-btn').hidden = rows.length === 1;
+  }
+
+  function openPropose(item) {
+    proposing = item;
+    const p = item.person;
+    $('#propose-title').textContent = `Propose a time to ${p.name}`;
+    $('#propose-intro').textContent = `Suggest up to ${state.inbox.maxSlots} times. ${p.name} picks one, and you both get a reminder 10 minutes before.`
+      + (p.timezone && p.timezone !== MY_TZ ? ' Times are in your time zone; theirs is shown under each.' : '');
+    $('#propose-slots').textContent = '';
+    const nextHour = Math.ceil(Date.now() / 3600000) * 3600000 + 3600000;
+    const existing = item.proposal?.mine ? item.proposal.slots : item.meetingAt ? [item.meetingAt] : [];
+    (existing.length ? existing : [nextHour]).forEach(addSlot);
+    openDialog('#propose-dialog');
+  }
+  $('#propose-add').addEventListener('click', () => {
+    const inputs = [...$('#propose-slots').querySelectorAll('input')];
+    const last = new Date(inputs.at(-1)?.value).getTime();
+    addSlot((Number.isFinite(last) ? last : Date.now()) + 24 * 3600000);
+  });
+  $('#propose-go').addEventListener('click', async () => {
+    const slots = [...$('#propose-slots').querySelectorAll('input')].map((i) => new Date(i.value).getTime()).filter(Number.isFinite);
+    const res = await emit('connect-propose', { id: proposing.id, slots });
+    if (res.error) { $('#propose-dialog .form-error').textContent = res.error; return; }
+    $('#propose-dialog').close();
+    toast({ title: 'Times sent', body: `${proposing.person.name} will pick one. We’ll let you know.`, timeout: 3500 });
+  });
+
+  // ---------- Inbox updates & notifications ----------
+
+  function renderBadges() {
+    const n = connectsUrgent();
+    document.querySelectorAll('.connects-badge').forEach((b) => { b.textContent = n; b.hidden = !n; });
   }
 
   function renderInbox() {
-    const { searches, incoming, outgoing, ready } = state.inbox;
-    const history = state.inbox.history || [];
-    const urgent = incoming.length + ready.filter((r) => r.available).length;
-    document.querySelectorAll('.inbox-badge').forEach((b) => { b.textContent = urgent; b.hidden = !urgent; });
     renderBgControls();
-    $('#bgp-notify').checked = !!state.inbox.notifyEmail;
-
-    // What happened since the last visit
-    const freshMatches = new Set(allMatches().filter((m) => m.new).map((m) => m.person.id)).size;
-    const freshRequests = incoming.filter((r) => r.new).length;
-    const freshAccepted = ready.filter((r) => r.new).length;
-    const parts = [
-      freshMatches && `${freshMatches} new ${freshMatches === 1 ? 'match' : 'matches'}`,
-      freshRequests && `${freshRequests} new ${freshRequests === 1 ? 'request' : 'requests'}`,
-      freshAccepted && `${freshAccepted} accepted`,
-    ].filter(Boolean);
-    $('#bgp-summary').hidden = !parts.length;
-    $('#bgp-summary').textContent = parts.length ? `While you were away: ${parts.join(' · ')}` : '';
-
-    const list = $('#bgs-list');
-    list.textContent = '';
-    for (const search of searches) list.append(searchCard(search));
-    $('#bgp-empty').hidden = !!searches.length;
-    $('#bgp-new').disabled = false;
-
-    const fill = (listId, sectionId, items, build) => {
-      const ul = $(listId);
-      ul.textContent = '';
-      $(sectionId).hidden = !items.length;
-      for (const it of items) ul.append(build(it));
-    };
-    fill('#inbox-ready', '#inbox-ready-section', ready, (r) => {
-      const li = inboxRow(r.person, `“${r.activity}” · ${statusLine(r.person)}`, r.new);
-      const call = button(r.available ? 'Call now' : 'Not online', 'btn btn-primary', () => callBack(r.person));
-      call.disabled = !r.available || !!state.room;
-      li.append(call);
-      return li;
-    });
-    fill('#inbox-incoming', '#inbox-incoming-section', incoming, (r) => {
-      const li = inboxRow(r.person, `“${r.activity}” · ${ago(r.at)}`, r.new);
-      li.append(
-        button('Decline', 'btn btn-ghost', () => emit('connect-respond', { id: r.id, accept: false })),
-        button('Accept', 'btn btn-good', () => acceptConnect(r.id, r.person)),
-      );
-      return li;
-    });
-    fill('#inbox-outgoing', '#inbox-outgoing-section', outgoing, (r) => {
-      const li = inboxRow(r.person, `Sent ${ago(r.at)} · ${statusLine(r.person)}`);
-      li.append(button('Cancel', 'btn btn-ghost', () => emit('connect-cancel', { id: r.id })));
-      return li;
-    });
-    fill('#inbox-history', '#inbox-history-section', history, (h) => inboxRow(h.person, `Talked ${ago(h.at)} · “${h.activity}”${h.friend ? ' · friends' : ''}`));
+    renderBadges();
+    renderBgPage();
+    renderConnects();
   }
 
   socket.on('inbox', (payload) => {
     state.inbox = payload;
-    // Searches that ended can't stay expanded.
-    for (const id of openSearches) if (!payload.searches.some((x) => x.id === id)) openSearches.delete(id);
-    renderInbox();
     // First load after coming back: tell them what happened while they were away.
     if (!shownAwaySummary) {
       shownAwaySummary = true;
-      const n = payload.incoming.length;
-      const r = payload.ready.length;
+      const cx = payload.connects;
+      const n = cx.answer.length;
+      const r = cx.ready.filter((x) => x.new).length;
+      const fresh = payload.searches.find((x) => x.matches.some((y) => y.new));
       const m = new Set(allMatches().filter((x) => x.new).map((x) => x.person.id)).size;
-      // Searches with new matches open expanded.
-      for (const x of payload.searches) if (x.matches.some((y) => y.new)) openSearches.add(x.id);
+      if (fresh) selectedSearch = fresh.id;
       if (n || r || m) {
         const el = toast({
           title: 'While you were away',
           body: [
-            n && `${n} ${n === 1 ? 'person wants' : 'people want'} to connect`,
+            n && `${n} ${n === 1 ? 'connect needs' : 'connects need'} your answer`,
             r && `${r} accepted your request`,
             m && `${m} new background ${m === 1 ? 'match' : 'matches'}`,
           ].filter(Boolean).join(' · '),
           timeout: 12000,
-          actions: [{ label: 'View', cls: 'btn-primary', onClick: () => { dismiss(el); openBgPage(); } }],
+          actions: [{ label: 'View', cls: 'btn-primary', onClick: () => { dismiss(el); openPage(n || r ? 'connects' : 'background'); } }],
         });
       }
     }
+    renderInbox();
   });
   socket.on('disconnect', () => { shownAwaySummary = false; });
-
-  document.querySelectorAll('.inbox-btn').forEach((b) => b.addEventListener('click', openBgPage));
 
   socket.on('connect-request', ({ id, from, activity }) => {
     const el = toast({
@@ -1773,7 +1963,7 @@
         { label: 'Accept', cls: 'btn-good', onClick: async () => {
           dismiss(el);
           const res = await emit('connect-respond', { id, accept: true });
-          if (!res.error) toast({ title: `You and ${from.name} both want to connect 🎉`, body: 'Tap Call now under Requests.' });
+          if (!res.error) toast({ title: `You and ${from.name} both want to connect 🎉`, body: 'Call now or set a time under Connects.' });
         } },
       ],
     });
@@ -1782,13 +1972,42 @@
   socket.on('connect-accepted', ({ accountId, name }) => {
     const el = toast({
       title: `${name} accepted your request 🎉`,
-      body: 'You both want to connect. Call them now?',
+      body: 'You both want to connect. Call now, or set a time under Connects.',
       timeout: 20000,
-      actions: [{ label: 'Call now', cls: 'btn-good', onClick: async () => {
-        dismiss(el);
-        const res = await emit('connect-call', { accountId });
-        if (res.error) toast({ title: 'Couldn’t call', body: res.error });
-      } }],
+      actions: [
+        { label: 'Connects', onClick: () => { dismiss(el); openPage('connects'); } },
+        { label: 'Call now', cls: 'btn-good', onClick: async () => {
+          dismiss(el);
+          const res = await emit('connect-call', { accountId });
+          if (res.error) toast({ title: 'Couldn’t call', body: res.error });
+        } },
+      ],
+    });
+  });
+
+  // The other side proposed times, picked one, or called it off.
+  socket.on('connect-update', ({ kind, name, at }) => {
+    const copy = {
+      proposed: [`${name} suggested times to meet`, 'Pick the one that works for you.'],
+      scheduled: [`${name} picked a time 📅`, at ? `${new Date(at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}. We’ll remind you 10 minutes before.` : ''],
+      unscheduled: [`${name} cancelled the planned time`, 'You can still call when you’re both online, or propose another time.'],
+    }[kind];
+    if (!copy) return;
+    const el = toast({
+      title: copy[0], body: copy[1], timeout: 10000,
+      actions: [{ label: 'Open Connects', cls: 'btn-primary', onClick: () => { dismiss(el); openPage('connects'); } }],
+    });
+  });
+
+  socket.on('meeting-soon', ({ accountId, name, at }) => {
+    const el = toast({
+      title: `Your meeting with ${name} starts ${inText(at)}`,
+      body: 'Tap Join when you’re ready. They’ll get the call.',
+      timeout: 0,
+      actions: [
+        { label: 'Later', onClick: () => dismiss(el) },
+        { label: 'Join', cls: 'btn-good', onClick: () => { dismiss(el); callBack({ id: accountId, name }, true); } },
+      ],
     });
   });
 

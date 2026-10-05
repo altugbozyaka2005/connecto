@@ -171,4 +171,11 @@ if (!bgColumns.has('id')) {
 }
 db.exec('CREATE INDEX IF NOT EXISTS background_searches_user ON background_searches(user_id)');
 
+// Scheduling a meeting with someone you're connected to: one side proposes times, the other picks one.
+const crColumns = new Set(db.prepare('PRAGMA table_info(connect_requests)').all().map((c) => c.name));
+if (!crColumns.has('proposed_by')) db.exec('ALTER TABLE connect_requests ADD COLUMN proposed_by INTEGER');
+if (!crColumns.has('proposed_slots')) db.exec('ALTER TABLE connect_requests ADD COLUMN proposed_slots TEXT'); // JSON array of ms
+if (!crColumns.has('meeting_at')) db.exec('ALTER TABLE connect_requests ADD COLUMN meeting_at INTEGER');
+if (!crColumns.has('reminded_at')) db.exec('ALTER TABLE connect_requests ADD COLUMN reminded_at INTEGER');
+
 module.exports = db;

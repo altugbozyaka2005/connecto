@@ -89,9 +89,22 @@ function sendAdminReportEmail(to, { reportedName, reportedEmail, reason, details
 }
 
 // Background search: someone wants to connect / accepted / is looking for the same thing.
-function sendConnectNotice(user, { kind, name, activity }) {
+// A time in the recipient's own time zone, e.g. "Tue, Oct 7, 7:00 PM".
+function localTime(user, ms) {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: user.timezone || 'UTC', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: user.timezone ? undefined : 'short' }).format(new Date(ms));
+  } catch {
+    return new Date(ms).toUTCString();
+  }
+}
+
+function sendConnectNotice(user, { kind, name, activity, at }) {
   const appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  const when = at ? localTime(user, at) : '';
   const copy = {
+    proposed: [`${name} suggested times to meet`, `${name} proposed some times to talk. Open Connecto and pick the one that works for you.`],
+    scheduled: [`Meeting with ${name} set for ${when}`, `${name} picked ${when}. We'll remind you shortly before. Open Connecto at that time and tap Join.`],
+    reminder: [`Your meeting with ${name} starts soon`, `You're meeting ${name} at ${when}. Open Connecto and tap Join under Connects.`],
     request: [`${name} wants to connect`, `${name} would like to do “${activity}” with you. Open Connecto to accept or decline.`],
     accepted: [`${name} accepted your request`, `${name} wants to connect too. Open Connecto and call them when you’re both online.`],
     match: ['Someone is looking for the same thing', `${name} is also looking for “${activity}”. Open Connecto to send them a request.`],
@@ -103,7 +116,7 @@ function sendConnectNotice(user, { kind, name, activity }) {
       heading: copy[0],
       intro: `Hi ${user.first_name}! ${copy[1]}`,
       buttonText: 'Open Connecto',
-      url: appUrl,
+      url: kind === 'match' ? `${appUrl}/#background` : `${appUrl}/#connects`,
       outro: 'You get these because you started a background search. We send at most one every few hours. Turn them off under “Search in the background” in Connecto.',
     }),
   });

@@ -295,26 +295,34 @@ function inboxFor(accountId, presence, rowCache) {
   // Anything after their last visit is flagged "new" (null = first visit: nothing is new).
   const lastSeen = me?.last_seen_at || null;
   const isNew = (t) => !!lastSeen && t > lastSeen;
-  const incoming = [];
-  const outgoing = [];
-  const ready = [];
+  // Connects: everyone you're in touch with through background matching, each in exactly one group.
+  const connects = { answer: [], ready: [], scheduled: [], waiting: [], recent: [] };
   const requestWith = new Map(); // other accountId -> 'ready' | 'incoming' | 'sent'
   for (const r of background.forAccount(accountId)) {
     const otherId = r.from_id === accountId ? r.to_id : r.from_id;
     const other = cachedRow(rowCache, otherId);
     if (!other || other.banned_at || safety.isBlocked(accountId, otherId)) continue;
-    const item = { id: r.id, person: personSummary(other, presence), activity: r.activity, at: r.updated_at, new: isNew(r.updated_at) };
-    if (r.status === 'accepted') {
-      ready.push({ ...item, available: !!reachableSocket(otherId) });
-      requestWith.set(otherId, { state: 'ready', id: r.id });
-    } else if (r.to_id === accountId) {
-      incoming.push(item);
-      requestWith.set(otherId, { state: 'incoming', id: r.id });
-    } else {
-      outgoing.push(item);
-      requestWith.set(otherId, { state: 'sent', id: r.id });
+    const slots = r.proposed_slots ? JSON.parse(r.proposed_slots) : null;
+    const item = {
+      id: r.id, person: personSummary(other, presence), activity: r.activity, at: r.updated_at, new: isNew(r.updated_at),
+      friend: friends.areFriends(accountId, otherId),
+      available: r.status === 'accepted' && !!reachableSocket(otherId),
+      proposal: slots ? { mine: r.proposed_by === accountId, slots } : null,
+      meetingAt: r.meeting_at || null,
+    };
+    if (r.status === 'pending') {
+      const mine = r.from_id === accountId;
+      (mine ? connects.waiting : connects.answer).push({ ...item, kind: 'request' });
+      requestWith.set(otherId, { state: mine ? 'sent' : 'incoming', id: r.id });
+      continue;
     }
+    requestWith.set(otherId, { state: 'ready', id: r.id });
+    if (item.meetingAt) connects.scheduled.push(item);
+    else if (item.proposal) (item.proposal.mine ? connects.waiting : connects.answer).push({ ...item, kind: 'times' });
+    else connects.ready.push(item);
   }
+  connects.scheduled.sort((a, b) => a.meetingAt - b.meetingAt);
+  connects.ready.sort((a, b) => b.available - a.available || b.at - a.at);
   // Each of my searches with the other background searches like it (one entry per person).
   const searches = mine.map((bgMine) => {
     const best = new Map();
@@ -341,20 +349,24 @@ function inboxFor(accountId, presence, rowCache) {
     matches.sort((x, y) => y.foundAt - x.foundAt || y.score - x.score);
     return { id: bgMine.id, activity: bgMine.activity, startedAt: bgMine.createdAt, expiresAt: bgMine.expiresAt, matches: matches.slice(0, 20) };
   });
-  // People you actually talked to through a background request (last 7 days).
-  const history = [];
+  // People you actually talked to through a background request (last 7 days), unless they're in another group.
   for (const r of background.history(accountId)) {
     const otherId = r.from_id === accountId ? r.to_id : r.from_id;
+    if (requestWith.has(otherId) || connects.recent.some((x) => x.person.id === otherId)) continue;
     const other = cachedRow(rowCache, otherId);
     if (!other || other.banned_at || safety.isBlocked(accountId, otherId)) continue;
-    history.push({ person: personSummary(other, presence), activity: r.activity, at: r.updated_at, friend: friends.areFriends(accountId, otherId) });
+    connects.recent.push({
+      id: r.id, person: personSummary(other, presence), activity: r.activity, at: r.updated_at,
+      friend: friends.areFriends(accountId, otherId), available: !!reachableSocket(otherId),
+    });
   }
   return {
     searches,
     maxSearches: background.MAX_SEARCHES,
+    maxSlots: background.MAX_SLOTS,
     notifyEmail: !!me?.notify_email,
     lastSeen,
-    incoming, outgoing, ready, history,
+    connects,
   };
 }
 
@@ -804,6 +816,10 @@ io.on('connection', (socket) => {
     if (payload?.target) {
       const t = users.get(payload.target);
       if (t && t.roomId && t.roomId === u.roomId) p = { accountId: t.accountId };
+    } else if (payload?.accountId) {
+      // From Connects: someone you talked to through a background connection this week.
+      const id = Number(payload.accountId);
+      if (background.talkedRecently(u.accountId, id)) p = { accountId: id };
     } else if (u.lastPeer && (u.roomId || Date.now() - u.lastPeer.at <= LAST_PEER_TTL_MS)) {
       p = u.lastPeer;
     }
@@ -973,7 +989,10 @@ io.on('connection', (socket) => {
     const u = me();
     const targetId = Number(accountId);
     if (!u) return;
-    if (!background.has(targetId) && !background.between(u.accountId, targetId)) return ack?.({ error: 'They’re not searching anymore.' });
+    // Allowed: they're searching in the background, you're already in touch, or you talked recently ("call again").
+    if (!background.has(targetId) && !background.between(u.accountId, targetId) && !background.talkedRecently(u.accountId, targetId)) {
+      return ack?.({ error: 'They’re not searching anymore.' });
+    }
     if (safety.isBlocked(u.accountId, targetId)) return ack?.({ error: 'They’re not searching anymore.' });
     const mine = background.forUser(u.accountId);
     const from = mine.find((x) => x.id === Number(searchId));
@@ -1010,6 +1029,45 @@ io.on('connection', (socket) => {
     if (!u) return;
     background.cancel(Number(id), u.accountId);
     scheduleRecompute();
+  });
+
+  // ---- Scheduling a meeting with a connection ----
+
+  // Tell the other side (a toast if they're here, otherwise an email).
+  function tellOther(r, u, kind, at) {
+    const otherId = r.from_id === u.accountId ? r.to_id : r.from_id;
+    if (isOnline(otherId)) io.to(`account:${otherId}`).emit('connect-update', { kind, name: u.name, at });
+    else if (kind !== 'unscheduled') background.notify(otherId, kind, { name: u.name, at, urgent: true });
+  }
+
+  socket.on('connect-propose', ({ id, slots } = {}, ack) => {
+    const u = me();
+    if (!u) return;
+    const r = background.propose(Number(id), u.accountId, slots);
+    if (r.error) return ack?.({ error: r.error });
+    tellOther(r, u, 'proposed');
+    scheduleRecompute();
+    ack?.({ ok: true });
+  });
+
+  socket.on('connect-pick', ({ id, slot } = {}, ack) => {
+    const u = me();
+    if (!u) return;
+    const r = background.pick(Number(id), u.accountId, slot);
+    if (r.error) return ack?.({ error: r.error });
+    tellOther(r, u, 'scheduled', r.meeting_at);
+    scheduleRecompute();
+    ack?.({ ok: true, meetingAt: r.meeting_at });
+  });
+
+  socket.on('connect-unschedule', ({ id } = {}, ack) => {
+    const u = me();
+    if (!u) return;
+    const r = background.unschedule(Number(id), u.accountId);
+    if (!r) return ack?.({ error: 'That connection is no longer open.' });
+    if (r.meeting_at || r.proposed_slots) tellOther(r, u, 'unscheduled');
+    scheduleRecompute();
+    ack?.({ ok: true });
   });
 
   // Both said yes: ring them now (works from any screen, like a friend's call).
@@ -1194,6 +1252,21 @@ io.on('connection', (socket) => {
   });
 });
 
+// Meetings starting in the next few minutes: remind both sides (a toast with Join if they're here, else an email).
+function sendMeetingReminders() {
+  for (const r of background.dueReminders()) {
+    const rowA = db.prepare('SELECT * FROM users WHERE id = ?').get(r.from_id);
+    const rowB = db.prepare('SELECT * FROM users WHERE id = ?').get(r.to_id);
+    if (!rowA || !rowB) continue;
+    for (const [me, other] of [[rowA, rowB], [rowB, rowA]]) {
+      if (isOnline(me.id)) io.to(`account:${me.id}`).emit('meeting-soon', { id: r.id, accountId: other.id, name: displayName(other), at: r.meeting_at });
+      else background.notify(me.id, 'reminder', { name: displayName(other), at: r.meeting_at, urgent: true });
+    }
+  }
+  scheduleRecompute();
+}
+setInterval(sendMeetingReminders, 30 * 1000).unref();
+
 if (require.main === module) {
   server.listen(PORT, () => console.log(`Connecto running at http://localhost:${PORT}`));
 
@@ -1210,4 +1283,4 @@ if (require.main === module) {
   process.on('SIGINT', shutdown);
 }
 
-module.exports = { server, io };
+module.exports = { server, io, sendMeetingReminders };
