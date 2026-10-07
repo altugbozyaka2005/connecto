@@ -14,6 +14,7 @@
     user: null, // own account, from /api/auth/me
     pendingAvatar: null, // photo chosen on the sign-up form
     activity: '',
+    searching: false, // the server has us in live matching (re-sent after a reconnect)
     room: null, // { roomId, peer, initiator }
     matches: [],
     incoming: new Map(), // fromId -> toast element
@@ -445,6 +446,7 @@
     if (res.error) { $('#activity-error').textContent = res.error; return; }
     $('#activity-error').textContent = '';
     state.activity = activity;
+    state.searching = true;
     $('#my-activity').textContent = activity;
     clearIncoming();
     renderMatches([]);
@@ -455,8 +457,10 @@
   document.querySelectorAll('a.brand-sm').forEach((logo) => logo.addEventListener('click', (e) => {
     e.preventDefault();
     if (state.room || !state.user) return;
-    if (document.querySelector('#screen-matches[data-active]')) {
+    // Leaving the matches (from that screen or from a page on top of it) stops live matching.
+    if (state.searching) {
       socket.emit('stop-searching');
+      state.searching = false;
       clearIncoming();
     }
     $('#activity-input').value = state.activity;
@@ -466,6 +470,7 @@
 
   $('#change-activity-btn').addEventListener('click', () => {
     socket.emit('stop-searching');
+    state.searching = false;
     clearIncoming();
     $('#activity-input').value = state.activity;
     show('screen-activity');
@@ -1059,6 +1064,8 @@
     closeTileMenu();
     $('#chat-panel').removeAttribute('data-open');
     // Calls from a friend invite can start before you've typed an activity.
+    // With one, the server puts you back in live matching.
+    state.searching = !!state.activity;
     show(state.activity ? 'screen-matches' : 'screen-activity');
     if (notice) toast({ title: notice, body: 'You’re back in the match list.' });
   }
@@ -2550,9 +2557,17 @@
     // First connect needs nothing; after a reconnect the server has a fresh, idle entry for us.
     if (!everConnected) { everConnected = true; return; }
     if (state.room) exitRoom('Connection lost');
-    if (state.activity && document.querySelector('#screen-matches[data-active]')) {
-      await emit('set-activity', { activity: state.activity });
+    // Whatever page we're on (Connects, Background, Friends), keep live matching going.
+    if (state.searching && state.activity) {
+      const res = await emit('set-activity', { activity: state.activity });
+      if (res.error) state.searching = false;
     }
+  });
+
+  // The server says which account this connection is. If it isn't the one on screen (you signed
+  // into another account in another tab, which replaced this browser's login), reload as that account.
+  socket.on('hello', ({ accountId }) => {
+    if (state.user && state.user.id !== accountId) location.reload();
   });
 
   socket.on('connect_error', (err) => {

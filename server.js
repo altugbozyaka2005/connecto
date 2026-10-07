@@ -721,6 +721,7 @@ io.on('connection', (socket) => {
   };
   applyProfile(entry, account);
   users.set(socket.id, entry);
+  socket.emit('hello', { accountId: account.id });
   // Friends see us come online.
   scheduleRecompute();
 
@@ -1342,6 +1343,16 @@ io.on('connection', (socket) => {
     if (!isOnline(u.accountId)) db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(Date.now(), u.accountId);
     scheduleRecompute();
   });
+});
+
+// Diagnostics: `docker kill -s USR2 connecto-connecto-1` prints who is connected and what they're
+// doing (live matching state only exists in memory), then read it with `docker logs`.
+process.on('SIGUSR2', () => {
+  const tabs = [...users.values()].map((u) => ({
+    account: u.accountId, name: u.name, status: u.status, activity: u.activity, room: u.roomId,
+    since: new Date(u.joinedAt).toISOString(),
+  }));
+  console.log(`[live] ${tabs.length} tabs, ${rooms.size} rooms\n${tabs.map((t) => JSON.stringify(t)).join('\n')}`);
 });
 
 // Meetings starting in the next few minutes: remind both sides (a toast with Join if they're here, else an email).
