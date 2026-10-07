@@ -743,30 +743,62 @@ a.menu-item[hidden] { display: none; }
 .offline-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 60; max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 14px; font-weight: 600; box-shadow: var(--shadow-lg); text-align: center; }
 .offline-bar[hidden] { display: none; }
 
-/* ---------- Matches: Find people (left) | Incoming requests (right) ---------- */
+/* ---------- Matches: playground + incoming requests panel ---------- */
 .split-main { max-width: 1320px; }
-.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0; margin-top: 24px; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
-  /* Right half tinted green all the way down, however short its content is. */
-  background: linear-gradient(to right, var(--surface) 50%, color-mix(in srgb, var(--good) 4%, var(--surface)) 50%); }
-.pane { min-width: 0; padding: 22px 24px 28px; }
-.pane-find { border-right: 1px solid var(--border); }
-/* The incoming side stays in view while you scroll through matches. */
-@media (min-width: 861px) {
-  .pane-incoming { position: sticky; top: 72px; align-self: start; max-height: calc(100dvh - 88px); overflow-y: auto; }
-}
+.playground { margin-top: 24px; padding: 22px 24px 28px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+.pane { min-width: 0; }
 .pane-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .pane-head h2 { display: flex; align-items: center; gap: 8px; font-size: 22px; }
-.pane-head p { color: var(--muted); font-size: 14px; line-height: 1.5; margin-top: 4px; max-width: 440px; }
+.pane-head p { color: var(--muted); font-size: 14px; line-height: 1.5; margin-top: 4px; max-width: 560px; }
 .pane-head .live { flex: none; margin-top: 6px; }
 .pane-arrow { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; font-size: 16px; background: var(--accent-soft); color: var(--accent); }
-.pane-incoming .pane-arrow { background: color-mix(in srgb, var(--good) 16%, var(--surface)); color: var(--good); }
+.drawer .pane-arrow { background: color-mix(in srgb, var(--good) 16%, var(--surface)); color: var(--good); }
 .pane-sub { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin: 4px 0 12px; }
 .pane-n { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; display: inline-grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-size: 12px; letter-spacing: 0; }
-.pane-find .grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .pane-find .away-section { margin-top: 28px; }
 .pane-find .empty { padding: 32px 8px; }
 .sent-section { margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px dashed var(--border); }
 .sent-section[hidden] { display: none; }
+.sent-section .req-list { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+
+/* The panel slides in from the right; on wide screens the playground makes room for it. */
+.drawer {
+  position: fixed; top: 69px; right: 0; bottom: 0; z-index: 15; width: min(420px, 100vw);
+  display: flex; flex-direction: column; background: color-mix(in srgb, var(--good) 4%, var(--surface));
+  border-left: 1px solid var(--border); box-shadow: var(--shadow-lg);
+  transform: translateX(100%); visibility: hidden; transition: transform .28s ease, visibility 0s linear .28s;
+}
+#screen-matches[data-drawer] .drawer { transform: none; visibility: visible; transition: transform .28s ease; }
+@media (min-width: 1200px) {
+  #screen-matches .split-main { transition: padding-right .28s ease; }
+  #screen-matches[data-drawer] .split-main { padding-right: 444px; }
+}
+.drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 18px 18px 12px; border-bottom: 1px solid var(--border); }
+.drawer-head h2 { display: flex; align-items: center; gap: 8px; font-size: 20px; }
+.drawer-head p { color: var(--muted); font-size: 13.5px; margin-top: 4px; }
+.drawer-close { padding: 8px; flex: none; }
+.drawer-body { flex: 1; overflow-y: auto; padding: 14px 16px 24px; }
+.drawer .req-list { gap: 10px; }
+
+/* Edge tab: always there on the matches screen to open or close the panel. */
+.drawer-tab {
+  position: fixed; right: 0; top: 50%; z-index: 16; transform: translateY(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 8px;
+  border: 1px solid var(--border); border-right: 0; border-radius: 14px 0 0 14px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow);
+  transition: right .28s ease, background .15s;
+}
+.drawer-tab span:not(.badge) { writing-mode: vertical-rl; transform: rotate(180deg); }
+.drawer-tab svg { transition: transform .28s ease; }
+.drawer-tab[data-has] { border-color: color-mix(in srgb, var(--good) 55%, var(--border)); }
+.drawer-tab[data-has] svg { color: var(--good); }
+#screen-matches[data-drawer] .drawer-tab { right: min(420px, 100vw); }
+#screen-matches[data-drawer] .drawer-tab svg { transform: rotate(180deg); }
+@media (max-width: 560px) {
+  #screen-matches[data-drawer] .drawer-tab { display: none; }
+  .drawer { top: 0; z-index: 30; }
+}
+.req-card[data-leaving] { opacity: 0; transform: translateX(24px); transition: opacity .2s, transform .2s; }
 
 /* Request cards (both sides) */
 .req-list { display: grid; gap: 12px; }
@@ -807,18 +839,11 @@ a.menu-item[hidden] { display: none; }
 .my-card-preview { cursor: default; border-style: dashed; box-shadow: none; animation: none; }
 .my-card-preview:hover { transform: none; box-shadow: none; border-color: var(--border); }
 
-/* Phones: one side at a time, switched with tabs */
-.split-tabs { display: none; }
 @media (max-width: 860px) {
-  .split-tabs { display: flex; gap: 6px; margin-top: 18px; padding: 4px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--border); }
-  .split-tab { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; border: 0; border-radius: 10px; background: none; color: var(--muted); font: inherit; font-weight: 700; cursor: pointer; }
-  .split-tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
-  .split-tab .n { font-weight: 600; color: var(--muted); }
-  .split { grid-template-columns: 1fr; margin-top: 12px; border: 0; background: none; box-shadow: none; }
-  .pane { padding: 4px 0 0; }
-  .pane-find { border-right: 0; }
-  .split[data-pane="find"] .pane-incoming, .split[data-pane="incoming"] .pane-find { display: none; }
+  .playground { padding: 16px 14px 22px; margin-top: 16px; }
   .pane-head h2 { font-size: 20px; }
+  .sent-section .req-list { grid-template-columns: 1fr; }
   .req-card[data-side="sent"] { grid-template-columns: auto minmax(0, 1fr); }
   .req-card[data-side="sent"] .req-actions { grid-column: 1 / -1; }
+}
 }

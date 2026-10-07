@@ -456,7 +456,7 @@
     renderMatches([]);
     state.sent = [];
     state.incomingList = [];
-    showPane('find');
+    setDrawer(false);
     renderRequests();
     show('screen-matches');
   });
@@ -647,15 +647,19 @@
   state.sent = [];
   state.incomingList = [];
 
-  // The right pane is on screen (side by side on wide screens; a tab on phones).
-  const incomingVisible = () => !!document.querySelector('#screen-matches[data-active]')
-    && (window.matchMedia('(min-width: 861px)').matches || $('#split').dataset.pane === 'incoming');
-
-  function showPane(pane) {
-    $('#split').dataset.pane = pane;
-    document.querySelectorAll('.split-tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.pane === pane)));
+  // Incoming requests live in a panel that slides in from the right of the matches screen.
+  // It opens by itself when a new request arrives; the edge tab and ✕ open and close it.
+  const drawerOpen = () => $('#screen-matches').hasAttribute('data-drawer');
+  function setDrawer(open) {
+    $('#screen-matches').toggleAttribute('data-drawer', open);
+    $('#incoming-drawer').setAttribute('aria-hidden', String(!open));
+    $('#incoming-tab').setAttribute('aria-expanded', String(open));
   }
-  document.querySelectorAll('.split-tab').forEach((t) => t.addEventListener('click', () => showPane(t.dataset.pane)));
+  $('#incoming-tab').addEventListener('click', () => setDrawer(!drawerOpen()));
+  $('#incoming-close').addEventListener('click', () => setDrawer(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && drawerOpen() && !document.querySelector('dialog[open]')) setDrawer(false);
+  });
 
   // A request as a wide card: who, what they're doing, and the buttons for this side.
   function requestCard(m, side) {
@@ -708,7 +712,14 @@
     actions.className = 'req-actions';
     if (side === 'incoming') {
       const accept = button('Accept · join call', 'btn btn-good', () => { accept.disabled = true; respond(m.id, true); });
-      actions.append(button('Decline', 'btn btn-ghost', () => respond(m.id, false)), accept);
+      // Declining takes the card away right away.
+      const decline = button('Decline', 'btn btn-ghost', () => {
+        state.incomingList = state.incomingList.filter((x) => x.id !== m.id);
+        card.dataset.leaving = '';
+        setTimeout(renderRequests, 200);
+        respond(m.id, false);
+      });
+      actions.append(decline, accept);
     } else {
       const waiting = document.createElement('span');
       waiting.className = 'req-waiting';
@@ -742,30 +753,37 @@
   function renderRequests() {
     const { sent, incomingList: incoming } = state;
     const now = new Set();
+    let arrived = false;
     const fill = (id, list, side) => {
       const box = $(id);
       box.textContent = '';
       for (const m of list) {
         const card = requestCard(m, side);
         const key = `${side}:${m.id}`;
-        if (!shownRequests.has(key)) card.dataset.fresh = '';
+        if (!shownRequests.has(key)) {
+          card.dataset.fresh = '';
+          if (side === 'incoming') arrived = true;
+        }
         now.add(key);
         box.append(card);
       }
     };
     fill('#sent-list', sent, 'sent');
-    fill('#incoming-list', incoming, 'incoming');
+    // Highest match on top; equal matches, newest first.
+    fill('#incoming-list', [...incoming].sort((a, b) => b.score - a.score || b.at - a.at), 'incoming');
     shownRequests.clear();
     for (const k of now) shownRequests.add(k);
     $('#sent-section').hidden = !sent.length;
     $('#n-sent').textContent = sent.length;
     $('#incoming-empty').hidden = incoming.length > 0;
     if (!incoming.length) renderMyCard();
-    for (const id of ['#n-incoming', '#split-n-incoming']) {
+    for (const id of ['#n-incoming', '#incoming-tab-n']) {
       $(id).textContent = incoming.length;
       $(id).hidden = !incoming.length;
     }
-    $('#split-n-find').textContent = state.people.length + state.away.length || '';
+    $('#incoming-tab').toggleAttribute('data-has', incoming.length > 0);
+    // A new request slides the panel open.
+    if (arrived && document.querySelector('#screen-matches[data-active]')) setDrawer(true);
   }
   // "asked 2 min ago" keeps up with the clock.
   setInterval(() => { if (document.querySelector('#screen-matches[data-active]')) renderRequests(); }, 30 * 1000);
@@ -789,9 +807,8 @@
 
   socket.on('incoming-request', ({ from, score, friend, connect }) => {
     if (state.room || state.incoming.has(from.id)) return;
-    // On the matches screen the request appears in the Incoming pane; no pop-up needed if it's visible.
-    if (incomingVisible()) return;
-    const onMatches = !!document.querySelector('#screen-matches[data-active]');
+    // On the matches screen the request lands in the Incoming panel, which opens by itself.
+    if (document.querySelector('#screen-matches[data-active]')) return;
     const details = [metaLine(from), from.bio].filter(Boolean).join(' · ');
     const el = toast({
       title: friend ? `Your friend ${from.name} is inviting you to a call`
@@ -802,9 +819,7 @@
       avatarOf: from,
       timeout: 0,
       actions: [
-        onMatches
-          ? { label: 'View', onClick: () => { dismiss(el); state.incoming.delete(from.id); showPane('incoming'); } }
-          : { label: 'Decline', onClick: () => respond(from.id, false) },
+        { label: 'Decline', onClick: () => respond(from.id, false) },
         { label: 'Accept', cls: 'btn-good', onClick: () => respond(from.id, true) },
       ],
     });

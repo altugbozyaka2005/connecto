@@ -224,18 +224,13 @@
           </div>
         </div>
 
-        <div class="split-tabs" role="tablist" aria-label="Requests">
-          <button type="button" role="tab" class="split-tab" data-pane="find" aria-selected="true">Find people <span class="n" id="split-n-find"></span></button>
-          <button type="button" role="tab" class="split-tab" data-pane="incoming" aria-selected="false">Incoming <span class="badge" id="split-n-incoming" hidden></span></button>
-        </div>
-
-        <div class="split" id="split" data-pane="find">
-          <!-- Left: people you can ask, and the ones you're waiting on -->
+        <!-- The playground: explore people and groups; requests you sent show at the top -->
+        <div class="playground" id="playground">
           <section class="pane pane-find" aria-labelledby="pane-find-title">
             <header class="pane-head">
               <div>
                 <h2 id="pane-find-title"><span class="pane-arrow" aria-hidden="true">↗</span> Find people</h2>
-                <p>Tap someone to send a request. Your card lands in their <strong>Incoming requests</strong>, and the call starts when they accept.</p>
+                <p>Explore people and groups doing something similar. Tap someone to send a request: your card lands in their incoming requests, and the call starts when they accept.</p>
               </div>
               <span class="live"><i></i><span id="online-count">0</span> online now</span>
             </header>
@@ -280,24 +275,35 @@
             </div>
           </section>
 
-          <!-- Right: people who asked to join you -->
-          <section class="pane pane-incoming" aria-labelledby="pane-incoming-title">
-            <header class="pane-head">
-              <div>
-                <h2 id="pane-incoming-title"><span class="pane-arrow" aria-hidden="true">↙</span> Incoming requests <span class="badge" id="n-incoming" hidden></span></h2>
-                <p>People who want to join you. Accept and you’re in a video call together.</p>
-              </div>
-            </header>
-            <div class="req-list" id="incoming-list"></div>
-            <div class="incoming-empty" id="incoming-empty">
-              <div class="radar radar-sm" aria-hidden="true"><span></span><span></span><span></span></div>
-              <h3>No requests yet</h3>
-              <p>When someone taps your card, they show up here. This is the card they see:</p>
-              <div class="my-card" id="my-card"></div>
-            </div>
-          </section>
         </div>
       </main>
+
+      <!-- Incoming requests: a panel that slides in from the right (opens by itself when one arrives) -->
+      <button class="drawer-tab" id="incoming-tab" type="button" aria-controls="incoming-drawer" aria-expanded="false">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg>
+        <span>Incoming</span>
+        <span class="badge" id="incoming-tab-n" hidden></span>
+      </button>
+      <aside class="drawer" id="incoming-drawer" aria-labelledby="incoming-title" aria-hidden="true">
+        <header class="drawer-head">
+          <div>
+            <h2 id="incoming-title"><span class="pane-arrow" aria-hidden="true">↙</span> Incoming requests <span class="badge" id="n-incoming" hidden></span></h2>
+            <p>Highest match first. Accept and you’re in a video call together.</p>
+          </div>
+          <button type="button" class="btn btn-ghost drawer-close" id="incoming-close" aria-label="Close incoming requests">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6z"/></svg>
+          </button>
+        </header>
+        <div class="drawer-body">
+          <div class="req-list" id="incoming-list"></div>
+          <div class="incoming-empty" id="incoming-empty">
+            <div class="radar radar-sm" aria-hidden="true"><span></span><span></span><span></span></div>
+            <h3>No requests yet</h3>
+            <p>When someone taps your card, they show up here, and this panel opens by itself. This is the card they see:</p>
+            <div class="my-card" id="my-card"></div>
+          </div>
+        </div>
+      </aside>
     </section>
 
     <!-- 3b. Background searches -->
