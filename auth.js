@@ -442,8 +442,21 @@ function createAuthRouter({ onLogout = () => {}, onSessionsRevoked = () => {} } 
 }
 
 // Socket.IO middleware: only signed-in users may connect.
+// Short device description for connection logs ("Chrome on macOS").
+function deviceOf(ua = '') {
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'browser';
+  const os = /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : 'other';
+  return `${browser} on ${os}`;
+}
+
 function socketAuth(socket, next) {
   const s = sessionFromCookieHeader(socket.handshake.headers.cookie);
+  const device = deviceOf(socket.handshake.headers['user-agent']);
+  socket.data.device = device;
+  if (process.env.NODE_ENV !== 'test' && !process.env.DB_PATH?.includes(':memory:')) {
+    if (!s) console.log(`[conn] rejected: not signed in (${device}${socket.handshake.headers.cookie ? ', has a cookie' : ', no cookie'})`);
+    else if (!s.user.email_verified_at) console.log(`[conn] rejected: account ${s.user.id} email not confirmed (${device})`);
+  }
   if (!s) return next(new Error('unauthorized'));
   if (!s.user.email_verified_at) return next(new Error('unverified'));
   socket.data.sessionId = s.sessionId;

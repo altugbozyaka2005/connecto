@@ -739,3 +739,6 @@ a.menu-item[hidden] { display: none; }
 .slot-row .icon-btn { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 6px; border-radius: 8px; }
 .slot-row .icon-btn[hidden], #propose-add[hidden] { display: none; }
 .friends-view { max-width: 760px; }
+
+.offline-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 60; max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 14px; font-weight: 600; box-shadow: var(--shadow-lg); text-align: center; }
+.offline-bar[hidden] { display: none; }

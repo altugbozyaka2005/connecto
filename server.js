@@ -722,6 +722,9 @@ io.on('connection', (socket) => {
   applyProfile(entry, account);
   users.set(socket.id, entry);
   socket.emit('hello', { accountId: account.id });
+  const quiet = process.env.DB_PATH === ':memory:';
+  const tabsOf = (id) => [...users.values()].filter((x) => x.accountId === id).length;
+  if (!quiet) console.log(`[conn] + ${entry.name} (#${account.id}, ${socket.data.device}) · their tabs: ${tabsOf(account.id)} · online: ${users.size}`);
   // Friends see us come online.
   scheduleRecompute();
 
@@ -1072,11 +1075,12 @@ io.on('connection', (socket) => {
     ack?.({ ok: true });
   });
 
-  socket.on('connect-cancel', ({ id } = {}) => {
+  socket.on('connect-cancel', ({ id } = {}, ack) => {
     const u = me();
     if (!u) return;
     background.cancel(Number(id), u.accountId);
     scheduleRecompute();
+    ack?.({ ok: true });
   });
 
   // ---- Scheduling a meeting with a connection ----
@@ -1329,7 +1333,8 @@ io.on('connection', (socket) => {
     if (room) removeMember(room, u, 'left');
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', (reason) => {
+    if (!quiet) console.log(`[conn] - ${entry.name} (#${account.id}) ${reason}`);
     const u = me();
     if (!u) return;
     const room = rooms.get(u.roomId);

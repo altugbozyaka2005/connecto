@@ -72,8 +72,12 @@
     return parts.join(' · ');
   }
 
+  // Waits up to 10 s for the server's answer; offline or no answer resolves with an error instead of hanging.
   function emit(event, payload) {
-    return new Promise((resolve) => socket.emit(event, payload, (res) => resolve(res || {})));
+    if (!socket.connected) return Promise.resolve({ error: 'You’re offline right now. Reconnecting…' });
+    return new Promise((resolve) => {
+      socket.timeout(10000).emit(event, payload, (err, res) => resolve(err ? { error: 'The server didn’t answer. Check your connection and try again.' } : res || {}));
+    });
   }
 
   function toast({ title, body, avatarOf, actions, timeout = 4000 }) {
@@ -2569,6 +2573,17 @@
   socket.on('hello', ({ accountId }) => {
     if (state.user && state.user.id !== accountId) location.reload();
   });
+
+  // Show when this tab isn't connected (after a 2 s grace period), so nothing fails silently.
+  let offlineTimer = null;
+  const setOffline = (off) => {
+    clearTimeout(offlineTimer);
+    if (!off) { $('#offline-bar').hidden = true; return; }
+    offlineTimer = setTimeout(() => { if (!socket.connected && state.user?.emailVerified) $('#offline-bar').hidden = false; }, 2000);
+  };
+  socket.on('connect', () => setOffline(false));
+  socket.on('disconnect', () => setOffline(true));
+  socket.io.on('reconnect_attempt', () => setOffline(true));
 
   socket.on('connect_error', (err) => {
     if (err.message === 'unauthorized') signedOut('Your session has expired. Please sign in again.');
