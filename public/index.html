@@ -210,7 +210,7 @@
     <section class="screen" id="screen-matches">
       <header class="topbar" data-topbar></header>
 
-      <main class="matches-main">
+      <main class="matches-main split-main">
         <div class="status-card">
           <div>
             <p class="eyebrow">You're doing</p>
@@ -224,41 +224,78 @@
           </div>
         </div>
 
-        <div class="matches-head">
-          <h2>Closest matches</h2>
-          <span class="live"><i></i><span id="online-count">0</span> online now</span>
-        </div>
-        <div class="matches-tools">
-          <div class="tabs filter-tabs" role="tablist" aria-label="Show">
-            <button type="button" role="tab" class="tab" data-filter="all" aria-selected="true">All <span class="n" id="n-all"></span></button>
-            <button type="button" role="tab" class="tab" data-filter="people" aria-selected="false">People <span class="n" id="n-people"></span></button>
-            <button type="button" role="tab" class="tab" data-filter="groups" aria-selected="false">Groups <span class="n" id="n-groups"></span></button>
-          </div>
-          <button class="btn btn-ghost" id="start-group-btn" type="button">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
-            Start a group room
-          </button>
+        <div class="split-tabs" role="tablist" aria-label="Requests">
+          <button type="button" role="tab" class="split-tab" data-pane="find" aria-selected="true">Find people <span class="n" id="split-n-find"></span></button>
+          <button type="button" role="tab" class="split-tab" data-pane="incoming" aria-selected="false">Incoming <span class="badge" id="split-n-incoming" hidden></span></button>
         </div>
 
-        <div class="grid" id="match-grid"></div>
+        <div class="split" id="split" data-pane="find">
+          <!-- Left: people you can ask, and the ones you're waiting on -->
+          <section class="pane pane-find" aria-labelledby="pane-find-title">
+            <header class="pane-head">
+              <div>
+                <h2 id="pane-find-title"><span class="pane-arrow" aria-hidden="true">↗</span> Find people</h2>
+                <p>Tap someone to send a request. Your card lands in their <strong>Incoming requests</strong>, and the call starts when they accept.</p>
+              </div>
+              <span class="live"><i></i><span id="online-count">0</span> online now</span>
+            </header>
 
-        <section class="away-section" id="away-section" hidden>
-          <div class="away-head">
-            <h3>
-              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z"/></svg>
-              Searching in the background
-            </h3>
-            <p>These people aren't online right now, so you can't call them yet. Send a request and they'll see it when they're back.</p>
-          </div>
-          <div class="grid" id="away-grid"></div>
-        </section>
+            <section class="sent-section" id="sent-section" hidden>
+              <h3 class="pane-sub">Waiting for a reply <span class="pane-n" id="n-sent"></span></h3>
+              <div class="req-list" id="sent-list"></div>
+            </section>
 
-        <div class="empty" id="empty-state">
-          <div class="radar" aria-hidden="true"><span></span><span></span><span></span></div>
-          <h3>Looking for people…</h3>
-          <p>No one's doing something similar just yet. Keep this tab open — matches appear here the moment someone joins.</p>
-          <button class="btn btn-primary" id="bg-empty-btn" type="button">Keep searching in the background</button>
-          <p class="hint" id="bg-empty-hint">Close the tab and we'll keep looking. People can send you requests, and you'll see them when you're back.</p>
+            <h3 class="pane-sub">Closest matches</h3>
+            <div class="matches-tools">
+              <div class="tabs filter-tabs" role="tablist" aria-label="Show">
+                <button type="button" role="tab" class="tab" data-filter="all" aria-selected="true">All <span class="n" id="n-all"></span></button>
+                <button type="button" role="tab" class="tab" data-filter="people" aria-selected="false">People <span class="n" id="n-people"></span></button>
+                <button type="button" role="tab" class="tab" data-filter="groups" aria-selected="false">Groups <span class="n" id="n-groups"></span></button>
+              </div>
+              <button class="btn btn-ghost" id="start-group-btn" type="button">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z"/></svg>
+                Start a group room
+              </button>
+            </div>
+
+            <div class="grid" id="match-grid"></div>
+
+            <section class="away-section" id="away-section" hidden>
+              <div class="away-head">
+                <h3>
+                  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z"/></svg>
+                  Searching in the background
+                </h3>
+                <p>These people aren't online right now, so you can't call them yet. Send a request and they'll see it when they're back.</p>
+              </div>
+              <div class="grid" id="away-grid"></div>
+            </section>
+
+            <div class="empty" id="empty-state">
+              <div class="radar" aria-hidden="true"><span></span><span></span><span></span></div>
+              <h3>Looking for people…</h3>
+              <p>No one's doing something similar just yet. Keep this tab open — matches appear here the moment someone joins.</p>
+              <button class="btn btn-primary" id="bg-empty-btn" type="button">Keep searching in the background</button>
+              <p class="hint" id="bg-empty-hint">Close the tab and we'll keep looking. People can send you requests, and you'll see them when you're back.</p>
+            </div>
+          </section>
+
+          <!-- Right: people who asked to join you -->
+          <section class="pane pane-incoming" aria-labelledby="pane-incoming-title">
+            <header class="pane-head">
+              <div>
+                <h2 id="pane-incoming-title"><span class="pane-arrow" aria-hidden="true">↙</span> Incoming requests <span class="badge" id="n-incoming" hidden></span></h2>
+                <p>People who want to join you. Accept and you’re in a video call together.</p>
+              </div>
+            </header>
+            <div class="req-list" id="incoming-list"></div>
+            <div class="incoming-empty" id="incoming-empty">
+              <div class="radar radar-sm" aria-hidden="true"><span></span><span></span><span></span></div>
+              <h3>No requests yet</h3>
+              <p>When someone taps your card, they show up here. This is the card they see:</p>
+              <div class="my-card" id="my-card"></div>
+            </div>
+          </section>
         </div>
       </main>
     </section>

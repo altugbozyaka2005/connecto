@@ -140,6 +140,23 @@ function matchesFor(user) {
   return results.slice(0, MAX_MATCHES);
 }
 
+// Both sides of the matches screen: requests you sent (left) and requests sent to you (right).
+function requestsFor(user) {
+  const card = (other, at) => ({
+    ...publicUser(other),
+    score: Math.round(score(user.profile, other.profile) * 100),
+    shared: sharedInterests(user, other),
+    at: at || Date.now(),
+    friend: friends.areFriends(user.accountId, other.accountId),
+    connected: chat.isConnected(user.accountId, other.accountId),
+  });
+  const sent = [...user.outgoing].map((id) => users.get(id)).filter(Boolean)
+    .map((t) => card(t, user.sentAt.get(t.id))).sort((a, b) => b.at - a.at);
+  const incoming = [...user.incoming].map((id) => users.get(id)).filter(Boolean)
+    .map((f) => card(f, f.sentAt.get(user.id))).sort((a, b) => b.at - a.at);
+  return { sent, incoming };
+}
+
 // accountId -> profiles of what they're searching for live right now.
 function liveSearches() {
   const out = new Map();
@@ -229,7 +246,7 @@ function scheduleRecompute() {
     const rowCache = new Map();
     for (const u of users.values()) {
       if (u.status !== 'searching') continue;
-      io.to(u.id).emit('matches', { matches: matchesFor(u), groups: groupsFor(u), away: awayFor(u, live, rowCache), online: searching });
+      io.to(u.id).emit('matches', { matches: matchesFor(u), groups: groupsFor(u), away: awayFor(u, live, rowCache), ...requestsFor(u), online: searching });
     }
     pushFriendLists();
     pushInboxes(rowCache);
@@ -715,6 +732,7 @@ io.on('connection', (socket) => {
     roomId: null,
     outgoing: new Set(),
     incoming: new Set(),
+    sentAt: new Map(), // socketId -> when we sent them a request
     joinRequests: new Set(),
     roomInvites: new Map(), // roomId -> { fromId, fromName, byHost, timer }
     joinedAt: Date.now(),
@@ -777,6 +795,7 @@ io.on('connection', (socket) => {
     }
     if (u.outgoing.size >= 5) return ack?.({ error: 'You have too many pending requests. Wait for replies or cancel one.' });
     u.outgoing.add(t.id);
+    u.sentAt.set(t.id, Date.now());
     t.incoming.add(u.id);
     io.to(t.id).emit('incoming-request', { from: publicUser(u), score: Math.round(score(u.profile, t.profile) * 100) });
     ack?.({ ok: true });
@@ -917,6 +936,7 @@ io.on('connection', (socket) => {
     }
     u.outgoing.add(t.id);
     t.incoming.add(u.id);
+    u.sentAt.set(t.id, Date.now());
     io.to(t.id).emit('incoming-request', { from: publicUser(u), friend: true });
     ack?.({ ok: true });
     scheduleRecompute();
@@ -1180,6 +1200,7 @@ io.on('connection', (socket) => {
       return ack?.({ ok: true, matched: true });
     }
     u.outgoing.add(t.id);
+    u.sentAt.set(t.id, Date.now());
     t.incoming.add(u.id);
     io.to(t.id).emit('incoming-request', { from: publicUser(u), connect: true });
     ack?.({ ok: true });

@@ -454,6 +454,10 @@
     $('#my-activity').textContent = activity;
     clearIncoming();
     renderMatches([]);
+    state.sent = [];
+    state.incomingList = [];
+    showPane('find');
+    renderRequests();
     show('screen-matches');
   });
 
@@ -629,10 +633,142 @@
     else if (!res.matched) toast({ title: `Request sent to ${m.name}`, body: 'We’ll let you know when they respond.', timeout: 2500 });
   }
 
-  socket.on('matches', ({ matches, groups, away, online }) => {
+  socket.on('matches', ({ matches, groups, away, sent, incoming, online }) => {
     $('#online-count').textContent = Math.max(0, online - 1);
-    if (!state.room) renderMatches(matches, groups || [], away || []);
+    if (state.room) return;
+    renderMatches(matches, groups || [], away || []);
+    state.sent = sent || [];
+    state.incomingList = incoming || [];
+    renderRequests();
   });
+
+  // ---------- Requests: sent (left pane) and incoming (right pane) ----------
+
+  state.sent = [];
+  state.incomingList = [];
+
+  // The right pane is on screen (side by side on wide screens; a tab on phones).
+  const incomingVisible = () => !!document.querySelector('#screen-matches[data-active]')
+    && (window.matchMedia('(min-width: 861px)').matches || $('#split').dataset.pane === 'incoming');
+
+  function showPane(pane) {
+    $('#split').dataset.pane = pane;
+    document.querySelectorAll('.split-tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.pane === pane)));
+  }
+  document.querySelectorAll('.split-tab').forEach((t) => t.addEventListener('click', () => showPane(t.dataset.pane)));
+
+  // A request as a wide card: who, what they're doing, and the buttons for this side.
+  function requestCard(m, side) {
+    const card = document.createElement('article');
+    card.className = 'req-card';
+    card.dataset.side = side;
+    const av = document.createElement('div');
+    av.className = 'avatar avatar-md';
+    paintAvatar(av, m.name, m.avatar);
+    const info = document.createElement('div');
+    info.className = 'req-info';
+    const name = document.createElement('p');
+    name.className = 'req-name';
+    name.textContent = m.name;
+    for (const [on, label, cls] of [[m.friend, 'Friend', 'pill-friend'], [!m.friend && m.connected, 'Connect', 'pill-connect']]) {
+      if (!on) continue;
+      const pill = document.createElement('span');
+      pill.className = cls;
+      pill.textContent = label;
+      name.append(' ', pill);
+    }
+    const act = document.createElement('p');
+    act.className = 'req-activity';
+    act.textContent = m.activity ? `“${m.activity}”` : '';
+    const meta = document.createElement('p');
+    meta.className = 'req-meta';
+    meta.textContent = [m.activity && `${m.score}% match`, side === 'sent' ? `sent ${ago(m.at)}` : `asked ${ago(m.at)}`, metaLine(m)].filter(Boolean).join(' · ');
+    info.append(name, act, meta);
+    if (side === 'incoming') {
+      if (m.bio) {
+        const bio = document.createElement('p');
+        bio.className = 'req-bio';
+        bio.textContent = m.bio;
+        info.append(bio);
+      }
+      const shared = new Set((m.shared || []).map((x) => x.toLowerCase()));
+      if (m.interests?.length) {
+        const chips = document.createElement('div');
+        chips.className = 'mini-chips';
+        for (const i of m.interests) {
+          const c = document.createElement('span');
+          c.className = 'mini-chip' + (shared.has(i.toLowerCase()) ? ' shared' : '');
+          c.textContent = i;
+          chips.append(c);
+        }
+        info.append(chips);
+      }
+    }
+    const actions = document.createElement('div');
+    actions.className = 'req-actions';
+    if (side === 'incoming') {
+      const accept = button('Accept · join call', 'btn btn-good', () => { accept.disabled = true; respond(m.id, true); });
+      actions.append(button('Decline', 'btn btn-ghost', () => respond(m.id, false)), accept);
+    } else {
+      const waiting = document.createElement('span');
+      waiting.className = 'req-waiting';
+      waiting.innerHTML = '<i></i><i></i><i></i>';
+      waiting.append(' Waiting');
+      actions.append(waiting, button('Cancel', 'btn btn-ghost', () => socket.emit('cancel-request', { to: m.id })));
+    }
+    card.append(av, info, actions);
+    return card;
+  }
+
+  // How other people see you: shown in the empty Incoming pane.
+  function renderMyCard() {
+    const u = state.user;
+    const box = $('#my-card');
+    box.textContent = '';
+    if (!u) return;
+    const card = personCard({
+      id: 'me', name: u.displayName || u.firstName, avatar: u.avatar, activity: state.activity,
+      bio: u.bio, interests: u.interests || [], city: u.city, timezone: u.timezone, score: 100,
+    });
+    card.querySelector('.match-hit').remove();
+    card.querySelector('.card-more').remove();
+    card.querySelector('.match-meta').textContent = 'You';
+    card.querySelector('.match-foot').remove();
+    card.classList.add('my-card-preview');
+    box.append(card);
+  }
+
+  const shownRequests = new Set(); // cards already on screen don't animate in again
+  function renderRequests() {
+    const { sent, incomingList: incoming } = state;
+    const now = new Set();
+    const fill = (id, list, side) => {
+      const box = $(id);
+      box.textContent = '';
+      for (const m of list) {
+        const card = requestCard(m, side);
+        const key = `${side}:${m.id}`;
+        if (!shownRequests.has(key)) card.dataset.fresh = '';
+        now.add(key);
+        box.append(card);
+      }
+    };
+    fill('#sent-list', sent, 'sent');
+    fill('#incoming-list', incoming, 'incoming');
+    shownRequests.clear();
+    for (const k of now) shownRequests.add(k);
+    $('#sent-section').hidden = !sent.length;
+    $('#n-sent').textContent = sent.length;
+    $('#incoming-empty').hidden = incoming.length > 0;
+    if (!incoming.length) renderMyCard();
+    for (const id of ['#n-incoming', '#split-n-incoming']) {
+      $(id).textContent = incoming.length;
+      $(id).hidden = !incoming.length;
+    }
+    $('#split-n-find').textContent = state.people.length + state.away.length || '';
+  }
+  // "asked 2 min ago" keeps up with the clock.
+  setInterval(() => { if (document.querySelector('#screen-matches[data-active]')) renderRequests(); }, 30 * 1000);
 
   function ago(ms) {
     const min = Math.round((Date.now() - ms) / 60000);
@@ -653,6 +789,9 @@
 
   socket.on('incoming-request', ({ from, score, friend, connect }) => {
     if (state.room || state.incoming.has(from.id)) return;
+    // On the matches screen the request appears in the Incoming pane; no pop-up needed if it's visible.
+    if (incomingVisible()) return;
+    const onMatches = !!document.querySelector('#screen-matches[data-active]');
     const details = [metaLine(from), from.bio].filter(Boolean).join(' · ');
     const el = toast({
       title: friend ? `Your friend ${from.name} is inviting you to a call`
@@ -663,7 +802,9 @@
       avatarOf: from,
       timeout: 0,
       actions: [
-        { label: 'Decline', onClick: () => respond(from.id, false) },
+        onMatches
+          ? { label: 'View', onClick: () => { dismiss(el); state.incoming.delete(from.id); showPane('incoming'); } }
+          : { label: 'Decline', onClick: () => respond(from.id, false) },
         { label: 'Accept', cls: 'btn-good', onClick: () => respond(from.id, true) },
       ],
     });
