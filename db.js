@@ -125,6 +125,10 @@ if (!columns.has('notify_email')) db.exec('ALTER TABLE users ADD COLUMN notify_e
 if (!columns.has('notified_at')) db.exec('ALTER TABLE users ADD COLUMN notified_at INTEGER');
 // When their last tab closed: anything newer is "new while you were away".
 if (!columns.has('last_seen_at')) db.exec('ALTER TABLE users ADD COLUMN last_seen_at INTEGER');
+// Match preferences: what others filter on (country, spoken languages) and your own filters.
+if (!columns.has('country')) db.exec('ALTER TABLE users ADD COLUMN country TEXT'); // ISO 3166 code, e.g. TR
+if (!columns.has('languages')) db.exec('ALTER TABLE users ADD COLUMN languages TEXT'); // JSON array of ISO 639-1 codes
+if (!columns.has('match_prefs')) db.exec('ALTER TABLE users ADD COLUMN match_prefs TEXT'); // JSON, see prefs.js
 
 // connect_requests gained a 'done' status (they talked) so it can show as history.
 // SQLite can't alter a CHECK constraint, so rebuild the table once.

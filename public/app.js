@@ -61,9 +61,23 @@
   const MY_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
 
   // "Istanbul · 21:05 their time" (time only when they're in a different time zone).
+  // Country and language names in the viewer's own language; flags from country codes.
+  const PD = window.PREFS_DATA;
+  const UI_LANG = navigator.language || 'en';
+  const regionNames = new Intl.DisplayNames([UI_LANG, 'en'], { type: 'region' });
+  const languageNames = new Intl.DisplayNames([UI_LANG, 'en'], { type: 'language' });
+  const countryName = (c) => { try { return regionNames.of(c) || c; } catch { return c; } };
+  const languageName = (l) => {
+    try { const n = languageNames.of(l) || l; return n.charAt(0).toUpperCase() + n.slice(1); } catch { return l; }
+  };
+  const flagOf = (c) => (/^[A-Z]{2}$/.test(c || '') ? String.fromCodePoint(...[...c].map((ch) => 0x1f1a5 + ch.charCodeAt(0))) : '');
+  const MODE_LABEL = { video: '📹 Video', voice: '🎙 Voice', chat: '💬 Chat' };
+
   function metaLine(p) {
     const parts = [];
-    if (p.city) parts.push(p.city);
+    const flag = flagOf(p.country);
+    if (p.city) parts.push(flag ? `${flag} ${p.city}` : p.city);
+    else if (p.country) parts.push(`${flag} ${countryName(p.country)}`);
     if (p.timezone && p.timezone !== MY_TZ) {
       try {
         parts.push(`${new Intl.DateTimeFormat([], { timeZone: p.timezone, hour: 'numeric', minute: '2-digit' }).format(new Date())} their time`);
@@ -169,6 +183,8 @@
     document.querySelectorAll('.menu-email').forEach((el) => { el.textContent = user.email; });
     $('#greeting').textContent = `Hey ${user.firstName} 👋`;
     document.querySelectorAll('.admin-link').forEach((el) => { el.hidden = !user.isAdmin; });
+    if (user.matchPrefs) state.prefs = user.matchPrefs;
+    renderPrefsUI();
   }
 
   function onSignedIn(user) {
@@ -182,9 +198,14 @@
     if (!user.emailVerified) return showVerify(user);
     stopVerifyPolling();
     if (!socket.connected) socket.connect();
-    // Keep the stored time zone in sync with this device (people travel).
-    if (MY_TZ && user.timezone !== MY_TZ) {
-      api('PATCH', '/api/auth/me', { timezone: MY_TZ })
+    // Keep the stored time zone in sync with this device (people travel), and fill in country and
+    // languages from the browser the first time (editable under Match preferences → About you).
+    const sync = {};
+    if (MY_TZ && user.timezone !== MY_TZ) sync.timezone = MY_TZ;
+    if (!user.country && guessCountry()) sync.country = guessCountry();
+    if (!user.languages?.length && guessLanguages().length) sync.languages = guessLanguages();
+    if (Object.keys(sync).length) {
+      api('PATCH', '/api/auth/me', sync)
         .then(({ user: u }) => { setUser(u); socket.emit('refresh-profile'); })
         .catch(() => {});
     }
@@ -537,6 +558,7 @@
   function groupCard(g) {
     const card = $('#group-card-tpl').content.firstElementChild.cloneNode(true);
     card.querySelector('.seat-count').textContent = `${g.count}/${g.capacity}`;
+    showModePill(card, g.mode);
     const dots = card.querySelector('.seat-dots');
     for (let i = 0; i < g.capacity; i++) {
       const d = document.createElement('i');
@@ -580,6 +602,7 @@
     card.querySelector('.name-text').textContent = m.name;
     card.querySelector('.pill-friend').hidden = !m.friend;
     card.querySelector('.pill-away').hidden = !m.away;
+    showModePill(card, m.mode);
     if (m.away) card.classList.add('away');
     card.querySelector('.match-meta').textContent = m.away
       ? [`Searching in the background · ${ago(m.since)}`, metaLine(m)].filter(Boolean).join(' · ')
@@ -1054,8 +1077,24 @@
   // ---- Media ----
 
   async function startLocalMedia() {
+    const mode = state.room?.mode || 'video';
+    $('#cam-btn').hidden = mode !== 'video';
+    $('#mic-btn').hidden = mode === 'chat';
+    if (mode === 'chat') {
+      // Text-only call: no camera or microphone.
+      localStream = null;
+      systemMessage('This is a text chat. No camera or microphone.');
+      $('#chat-panel').setAttribute('data-open', '');
+      $('#local-video').srcObject = null;
+      $('#local-placeholder').hidden = false;
+      socket.emit('media-state', { video: false, audio: false });
+      return;
+    }
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true });
+      localStream = await navigator.mediaDevices.getUserMedia(mode === 'voice'
+        ? { audio: true }
+        : { video: { width: 1280, height: 720 }, audio: true });
+      if (mode === 'voice') systemMessage('This is a voice call. Cameras stay off.');
     } catch {
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1340,7 +1379,7 @@
   $('#create-room-go').addEventListener('click', async () => {
     const activity = $('#create-room-activity').value.trim();
     if (!activity) { $('#create-room-dialog .form-error').textContent = 'Tell people what the room is for.'; return; }
-    const res = await emit('create-room', { capacity: Number($('#create-room-size').value), activity });
+    const res = await emit('create-room', { capacity: Number($('#create-room-size').value), activity, mode: $('#create-room-mode').value });
     if (res.error) { $('#create-room-dialog .form-error').textContent = res.error; return; }
     state.activity = activity;
     $('#my-activity').textContent = activity;
@@ -1494,6 +1533,188 @@
     renderFriends();
     openDialog('#friends-dialog');
   }));
+
+  // ---------- Match preferences (filters + how you talk) ----------
+
+  const defaultPrefs = () => ({ genders: [], ages: [], countries: [], languages: [], modes: [...PD.MODES] });
+  state.prefs = defaultPrefs();
+  const GENDER_LABEL = { woman: 'Women', man: 'Men', nonbinary: 'Non-binary' };
+  const AGE_LABEL = { '18-25': '18–25', '26-35': '26–35', '36-45': '36–45', '46+': '46+' };
+  const byName = (list, name) => [...list].sort((a, b) => name(a).localeCompare(name(b)));
+
+  // Best guess from this device: time zone first, then the browser's region ("en-GB" → GB).
+  const TZ_COUNTRY = {
+    'Europe/Istanbul': 'TR', 'Europe/London': 'GB', 'Europe/Paris': 'FR', 'Europe/Berlin': 'DE', 'Europe/Madrid': 'ES',
+    'Europe/Rome': 'IT', 'Europe/Amsterdam': 'NL', 'Europe/Brussels': 'BE', 'Europe/Lisbon': 'PT', 'Europe/Dublin': 'IE',
+    'Europe/Athens': 'GR', 'Europe/Warsaw': 'PL', 'Europe/Kyiv': 'UA', 'Europe/Kiev': 'UA', 'Europe/Moscow': 'RU',
+    'Europe/Stockholm': 'SE', 'Europe/Oslo': 'NO', 'Europe/Copenhagen': 'DK', 'Europe/Helsinki': 'FI', 'Europe/Vienna': 'AT',
+    'Europe/Zurich': 'CH', 'Europe/Prague': 'CZ', 'Europe/Budapest': 'HU', 'Europe/Bucharest': 'RO', 'Europe/Sofia': 'BG',
+    'Asia/Dubai': 'AE', 'Asia/Tokyo': 'JP', 'Asia/Seoul': 'KR', 'Asia/Shanghai': 'CN', 'Asia/Kolkata': 'IN',
+    'Asia/Karachi': 'PK', 'Asia/Tehran': 'IR', 'Asia/Baku': 'AZ', 'Asia/Tbilisi': 'GE', 'Asia/Riyadh': 'SA',
+    'Africa/Cairo': 'EG', 'Australia/Sydney': 'AU', 'Australia/Melbourne': 'AU', 'America/Toronto': 'CA', 'America/Vancouver': 'CA',
+    'America/Sao_Paulo': 'BR', 'America/Mexico_City': 'MX', 'America/New_York': 'US', 'America/Chicago': 'US',
+    'America/Denver': 'US', 'America/Los_Angeles': 'US', 'America/Phoenix': 'US',
+  };
+  function guessCountry() {
+    if (TZ_COUNTRY[MY_TZ]) return TZ_COUNTRY[MY_TZ];
+    const region = (navigator.language || '').split('-')[1]?.toUpperCase();
+    return PD.COUNTRIES.includes(region) ? region : '';
+  }
+  function guessLanguages() {
+    const codes = (navigator.languages || [navigator.language || '']).map((l) => l.split('-')[0].toLowerCase());
+    return [...new Set(codes)].filter((l) => PD.LANGUAGES.includes(l)).slice(0, 3);
+  }
+
+  const activeFilters = (p) => ['genders', 'ages', 'countries', 'languages'].filter((k) => p[k].length).length + (p.modes.length < PD.MODES.length ? 1 : 0);
+  const listText = (items, label, max = 2) => (items.length <= max ? items.map(label).join(', ') : `${items.slice(0, max).map(label).join(', ')} +${items.length - max}`);
+
+  // "Women · 18–25 · 🇹🇷 Turkey · Turkish · Video, Voice"
+  function prefsSummary(p) {
+    return [
+      p.genders.length ? p.genders.map((g) => GENDER_LABEL[g]).join(' & ') : 'Everyone',
+      p.ages.length ? p.ages.map((a) => AGE_LABEL[a]).join(', ') : 'Any age',
+      p.countries.length ? listText(p.countries, (c) => `${flagOf(c)} ${countryName(c)}`) : 'Anywhere',
+      p.languages.length ? listText(p.languages, languageName) : 'Any language',
+      p.modes.length === PD.MODES.length ? 'Video, voice or chat' : p.modes.map((m) => MODE_LABEL[m].split(' ')[1]).join(' or '),
+    ].join(' · ');
+  }
+
+  function renderPrefsUI() {
+    const p = state.prefs;
+    const text = prefsSummary(p);
+    document.querySelectorAll('.prefs-summary').forEach((el) => { el.textContent = text; });
+    const n = activeFilters(p);
+    $('#filters-n').textContent = n;
+    $('#filters-n').hidden = !n;
+    $('#filter-summary').hidden = !n;
+  }
+
+  function showModePill(card, mode) {
+    const pill = card.querySelector('.pill-mode');
+    if (!pill) return;
+    pill.hidden = !mode || mode === 'video';
+    if (mode) pill.textContent = mode === 'voice' ? '🎙 Voice call' : '💬 Text chat';
+  }
+
+  // The dialog edits a copy; nothing changes until Save.
+  let draft = null;
+  let about = null; // { gender, country, languages } as edited
+  const chip = (label, pressed, onClick) => {
+    const b = button(label, 'pref-chip', onClick);
+    b.setAttribute('aria-pressed', String(pressed));
+    return b;
+  };
+  const toggle = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
+
+  function fillMoreSelect(sel, all, taken, name, placeholder) {
+    sel.textContent = '';
+    sel.append(new Option(placeholder, ''));
+    for (const code of byName(all.filter((c) => !taken.includes(c)), name)) sel.append(new Option(name(code), code));
+    sel.value = '';
+  }
+
+  function renderPrefsDialog() {
+    const box = (key) => $(`#prefs-dialog .pref-opts[data-key="${key}"]`);
+    const rerender = () => renderPrefsDialog();
+    // Gender, age: "anyone" plus toggles.
+    box('genders').replaceChildren(
+      chip('Everyone', !draft.genders.length, () => { draft.genders = []; rerender(); }),
+      ...PD.GENDERS.map((g) => chip(GENDER_LABEL[g], draft.genders.includes(g), () => { draft.genders = toggle(draft.genders, g); rerender(); })),
+    );
+    box('ages').replaceChildren(
+      chip('Any age', !draft.ages.length, () => { draft.ages = []; rerender(); }),
+      ...Object.keys(PD.AGE_BANDS).map((a) => chip(AGE_LABEL[a], draft.ages.includes(a), () => { draft.ages = toggle(draft.ages, a); rerender(); })),
+    );
+    // Country, language: popular ones as chips, the rest from a dropdown.
+    const listChips = (key, popular, name, anyLabel) => {
+      const shown = [...new Set([...popular, ...draft[key]])];
+      box(key).replaceChildren(
+        chip(anyLabel, !draft[key].length, () => { draft[key] = []; rerender(); }),
+        ...shown.map((c) => chip(name(c), draft[key].includes(c), () => { draft[key] = toggle(draft[key], c); rerender(); })),
+      );
+      const sel = $(`#prefs-dialog select.pref-more[data-key="${key}"]`);
+      fillMoreSelect(sel, key === 'countries' ? PD.COUNTRIES : PD.LANGUAGES, shown, name, key === 'countries' ? 'More countries…' : 'More languages…');
+    };
+    listChips('countries', PD.POPULAR_COUNTRIES, (c) => `${flagOf(c)} ${countryName(c)}`, 'Anywhere');
+    listChips('languages', PD.POPULAR_LANGUAGES, languageName, 'Any language');
+    // Modes: at least one stays on.
+    box('modes').replaceChildren(...PD.MODES.map((m) => chip(MODE_LABEL[m], draft.modes.includes(m), () => {
+      const next = toggle(draft.modes, m);
+      if (!next.length) return;
+      draft.modes = PD.MODES.filter((x) => next.includes(x));
+      rerender();
+    })));
+    // About you
+    $('#about-gender').value = ['woman', 'man', 'nonbinary'].includes(about.gender) ? about.gender : '';
+    const csel = $('#about-country');
+    if (!csel.options.length) {
+      csel.append(new Option('Not set', ''));
+      for (const c of byName(PD.COUNTRIES, countryName)) csel.append(new Option(`${flagOf(c)} ${countryName(c)}`, c));
+    }
+    csel.value = about.country || '';
+    $('#about-languages').replaceChildren(...about.languages.map((l) => {
+      const b = chip(`${languageName(l)} ✕`, true, () => { about.languages = about.languages.filter((x) => x !== l); rerender(); });
+      b.setAttribute('aria-label', `Remove ${languageName(l)}`);
+      return b;
+    }));
+    const lsel = $('#about-languages-more');
+    fillMoreSelect(lsel, PD.LANGUAGES, about.languages, languageName, about.languages.length ? 'Add another…' : 'Add a language…');
+    lsel.disabled = about.languages.length >= PD.MAX_LANGUAGES;
+    $('#pref-about-summary').textContent = [
+      about.country && `${flagOf(about.country)} ${countryName(about.country)}`,
+      about.languages.length && listText(about.languages, languageName),
+    ].filter(Boolean).join(' · ') || '(not filled in)';
+  }
+
+  function openPrefs() {
+    closeMenus();
+    draft = JSON.parse(JSON.stringify(state.prefs));
+    const u = state.user;
+    about = { gender: u.gender || '', country: u.country || '', languages: [...(u.languages || [])] };
+    // Open "About you" when something's missing, since filters by others depend on it.
+    $('#pref-about').open = !u.country || !u.languages?.length || !['woman', 'man', 'nonbinary'].includes(u.gender);
+    renderPrefsDialog();
+    openDialog('#prefs-dialog');
+  }
+  document.querySelectorAll('.open-prefs').forEach((b) => b.addEventListener('click', openPrefs));
+  document.querySelectorAll('#prefs-dialog select.pref-more').forEach((sel) => sel.addEventListener('change', () => {
+    if (sel.value) draft[sel.dataset.key] = [...draft[sel.dataset.key], sel.value];
+    renderPrefsDialog();
+  }));
+  $('#about-languages-more').addEventListener('change', (e) => {
+    if (e.target.value && about.languages.length < PD.MAX_LANGUAGES) about.languages.push(e.target.value);
+    renderPrefsDialog();
+  });
+  $('#about-gender').addEventListener('change', (e) => { about.gender = e.target.value; });
+  $('#about-country').addEventListener('change', (e) => { about.country = e.target.value; renderPrefsDialog(); });
+  $('#prefs-reset').addEventListener('click', () => { draft = defaultPrefs(); renderPrefsDialog(); });
+
+  $('#prefs-save').addEventListener('click', async () => {
+    const err = $('#prefs-dialog .form-error');
+    // About you: only send what changed (keeps "other"/"prefer not" genders from sign-up untouched).
+    const u = state.user;
+    const patch = {};
+    const shownGender = ['woman', 'man', 'nonbinary'].includes(u.gender) ? u.gender : '';
+    if (about.gender !== shownGender) patch.gender = about.gender || null;
+    if (about.country !== (u.country || '')) patch.country = about.country || null;
+    if (JSON.stringify(about.languages) !== JSON.stringify(u.languages || [])) patch.languages = about.languages;
+    try {
+      if (Object.keys(patch).length) {
+        const { user } = await api('PATCH', '/api/auth/me', patch);
+        setUser(user);
+        socket.emit('refresh-profile');
+      }
+    } catch (e) {
+      err.textContent = e.message;
+      return;
+    }
+    const res = await emit('set-prefs', draft);
+    if (res.error) { err.textContent = res.error; return; }
+    state.prefs = res.prefs;
+    renderPrefsUI();
+    $('#prefs-dialog').close();
+    toast({ title: 'Match preferences saved', body: prefsSummary(state.prefs), timeout: 3500 });
+  });
 
   // ---------- Edit profile ----------
 

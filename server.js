@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const { analyze, score } = require('./matcher');
 const embeddings = require('./embeddings');
 const chat = require('./chat');
+const prefs = require('./prefs');
 
 // A matcher profile for some text. Word-based scoring works right away; the meaning vector
 // arrives a moment later (a few ms once the model is loaded) and triggers a fresh match pass.
@@ -99,6 +100,7 @@ function publicUser(u) {
   return {
     id: u.id, name: u.name, avatar: u.avatar, activity: u.activity,
     bio: u.bio, interests: u.interests, city: u.city, timezone: u.timezone,
+    country: u.country, languages: u.languages,
   };
 }
 
@@ -107,7 +109,13 @@ function applyProfile(u, row) {
   u.name = displayName(row);
   u.avatar = row.avatar;
   Object.assign(u, profileExtras(row));
+  // For match filters: what others filter on, and this person's own filters.
+  u.facts = prefs.facts(row);
+  u.prefs = prefs.parse(row.match_prefs);
 }
+
+// { prefs, facts } for an account that may not be online (background searches).
+const matchSideOf = (row) => ({ prefs: prefs.parse(row.match_prefs), facts: prefs.facts(row) });
 
 function sharedInterests(a, b) {
   const mine = new Set((a.interests || []).map((i) => i.toLowerCase()));
@@ -122,6 +130,8 @@ function matchesFor(user) {
     // Skip yourself, including your own other tabs.
     if (other.accountId === user.accountId || other.status !== 'searching') continue;
     if (safety.isBlocked(user.accountId, other.accountId)) continue;
+    // Both people's filters (gender, age, country, language) and at least one shared mode.
+    if (!prefs.compatible(user, other)) continue;
     let s = score(user.profile, other.profile);
     if (s >= MIN_SCORE) {
       const shared = sharedInterests(user, other);
@@ -133,6 +143,7 @@ function matchesFor(user) {
         friend: friends.areFriends(user.accountId, other.accountId),
         requested: user.outgoing.has(other.id),
         requestedYou: user.incoming.has(other.id),
+        mode: prefs.callMode(user, other),
       });
     }
   }
@@ -184,7 +195,7 @@ function awayFor(user, live, rowCache) {
   for (const { bg, s } of best.values()) {
     if (safety.isBlocked(user.accountId, bg.accountId)) continue;
     const row = cachedRow(rowCache, bg.accountId);
-    if (!row || row.banned_at) continue;
+    if (!row || row.banned_at || !prefs.compatible(user, matchSideOf(row))) continue;
     const req = background.between(user.accountId, bg.accountId);
     results.push({
       accountId: bg.accountId,
@@ -212,6 +223,8 @@ function groupsFor(user) {
   const results = [];
   for (const room of rooms.values()) {
     if (!room.open || room.members.length >= room.capacity || room.removed.has(user.accountId)) continue;
+    // Groups are filtered by how they talk (video, voice, chat); members vary too much for the other filters.
+    if (!user.prefs.modes.includes(room.mode)) continue;
     const members = room.members.map((id) => users.get(id)).filter(Boolean);
     if (members.some((m) => m.accountId === user.accountId || safety.isBlocked(user.accountId, m.accountId))) continue;
     let s = score(user.profile, room.profile);
@@ -225,6 +238,7 @@ function groupsFor(user) {
       members: members.map((m) => ({ name: m.name, avatar: m.avatar, friend: friends.areFriends(user.accountId, m.accountId) })),
       count: members.length,
       capacity: room.capacity,
+      mode: room.mode,
       score: Math.round(s * 100),
       requested: room.joinRequests.has(user.id),
     });
@@ -364,7 +378,7 @@ function inboxFor(accountId, presence, rowCache) {
     for (const { bg, s } of best.values()) {
       if (safety.isBlocked(accountId, bg.accountId)) continue;
       const row = cachedRow(rowCache, bg.accountId);
-      if (!row || row.banned_at) continue;
+      if (!row || row.banned_at || !me || !prefs.compatible(matchSideOf(me), matchSideOf(row))) continue;
       // Found when the second of the two searches started.
       const foundAt = Math.max(bgMine.createdAt, bg.createdAt);
       const req = requestWith.get(bg.accountId);
@@ -478,6 +492,7 @@ function roomView(room, viewer) {
     capacity: room.capacity,
     open: room.open,
     activity: room.activity,
+    mode: room.mode,
     members: room.members.map((id) => users.get(id)).filter(Boolean).map((m) => ({
       ...publicUser(m),
       friend: m.accountId !== viewer.accountId && friends.areFriends(viewer.accountId, m.accountId),
@@ -496,9 +511,10 @@ function broadcastRoom(room) {
   scheduleRecompute();
 }
 
-function newRoom({ capacity = 2, open = false, hostId = null, activity = '' } = {}) {
+function newRoom({ capacity = 2, open = false, hostId = null, activity = '', mode = 'video' } = {}) {
   const room = {
     id: crypto.randomUUID(),
+    mode, // 'video' | 'voice' | 'chat'
     members: [],
     hostId,
     capacity,
@@ -539,7 +555,8 @@ function addMember(room, u) {
 
 // 1:1 call from a request. The requester joins second so they make the WebRTC offer.
 function openRoom(requester, accepter) {
-  const room = newRoom();
+  // The richest way of talking both allow; friends and connects without a shared mode default to video.
+  const room = newRoom({ mode: prefs.callMode(requester, accepter) || 'video' });
   for (const [u, peer] of [[accepter, requester], [requester, accepter]]) {
     u.lastPeer = { accountId: peer.accountId, name: peer.name, activity: peer.activity, chat: room.chat, at: Date.now() };
   }
@@ -785,7 +802,8 @@ io.on('connection', (socket) => {
     const u = me();
     const t = users.get(to);
     if (!u || u.status !== 'searching') return ack?.({ error: 'You are not searching.' });
-    if (!t || t.status !== 'searching' || t.accountId === u.accountId || safety.isBlocked(u.accountId, t.accountId)) {
+    if (!t || t.status !== 'searching' || t.accountId === u.accountId || safety.isBlocked(u.accountId, t.accountId)
+      || !prefs.compatible(u, t)) {
       return ack?.({ error: 'That person is no longer available.' });
     }
     // If they already asked us, treat this as an accept.
@@ -1237,7 +1255,28 @@ io.on('connection', (socket) => {
 
   // Start a group room from search; you're the host and it's open right away.
   // `activity` (optional) lets the host word the room differently from their current search.
-  socket.on('create-room', ({ capacity, activity } = {}, ack) => {
+  // Match preferences (filters and modes). Saved on the account and applied to every open tab.
+  socket.on('set-prefs', (p, ack) => {
+    const u = me();
+    if (!u) return;
+    const value = prefs.clean(p || {});
+    db.prepare('UPDATE users SET match_prefs = ? WHERE id = ?').run(JSON.stringify(value), u.accountId);
+    for (const x of users.values()) if (x.accountId === u.accountId) x.prefs = value;
+    // Requests that no longer fit either side's filters are withdrawn.
+    for (const id of [...u.outgoing]) {
+      const t = users.get(id);
+      if (t && !prefs.compatible(u, t)) {
+        u.outgoing.delete(id);
+        t.incoming.delete(u.id);
+        io.to(t.id).emit('request-cancelled', { from: u.id });
+      }
+    }
+    scheduleRecompute();
+    ack?.({ ok: true, prefs: value });
+  });
+
+  // `mode` (optional): video, voice or chat; defaults to the richest the host allows.
+  socket.on('create-room', ({ capacity, activity, mode: requestedMode } = {}, ack) => {
     const u = me();
     if (!u || u.status === 'in-room') return ack?.({ error: 'Leave your current call first.' });
     const wording = clean(activity, 140);
@@ -1249,7 +1288,8 @@ io.on('connection', (socket) => {
     u.status = 'searching';
     const cap = Number(capacity);
     if (!Number.isInteger(cap) || cap < 2 || cap > MAX_ROOM_SIZE) return ack?.({ error: `Choose a size from 2 to ${MAX_ROOM_SIZE}.` });
-    const room = newRoom({ capacity: cap, open: true, hostId: u.id, activity: u.activity });
+    const mode = prefs.MODES.includes(requestedMode) && u.prefs.modes.includes(requestedMode) ? requestedMode : u.prefs.modes[0];
+    const room = newRoom({ capacity: cap, open: true, hostId: u.id, activity: u.activity, mode });
     addMember(room, u);
     broadcastRoom(room);
     ack?.({ ok: true });
@@ -1287,6 +1327,7 @@ io.on('connection', (socket) => {
     if (!u || u.status !== 'searching') return ack?.({ error: 'Tell us what you’re doing first.' });
     if (!room || !room.open || room.removed.has(u.accountId)) return ack?.({ error: 'That group isn’t taking new people.' });
     if (room.members.length >= room.capacity) return ack?.({ error: 'That group is full.' });
+    if (!u.prefs.modes.includes(room.mode)) return ack?.({ error: `That group is ${room.mode} only. Allow ${room.mode} in your match preferences to join.` });
     const members = room.members.map((id) => users.get(id)).filter(Boolean);
     if (members.some((m) => m.accountId === u.accountId || safety.isBlocked(u.accountId, m.accountId))) {
       return ack?.({ error: 'That group isn’t taking new people.' });

@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const express = require('express');
 const db = require('./db');
+const prefs = require('./prefs');
 const mail = require('./mail');
 
 const COOKIE = 'connecto_sid';
@@ -227,6 +228,7 @@ function selfView(u) {
     avatar: u.avatar,
     emailVerified: !!u.email_verified_at,
     isAdmin: isAdmin(u),
+    matchPrefs: prefs.parse(u.match_prefs),
     ...profileExtras(u),
   };
 }
@@ -239,7 +241,10 @@ const MAX_INTERESTS = 5;
 function profileExtras(u) {
   let interests = [];
   try { interests = JSON.parse(u.interests || '[]'); } catch { /* corrupt -> empty */ }
-  return { bio: u.bio || '', interests, city: u.city || '', timezone: u.timezone || '' };
+  return {
+    bio: u.bio || '', interests, city: u.city || '', timezone: u.timezone || '',
+    country: u.country || '', languages: prefs.parseLanguages(u.languages),
+  };
 }
 
 const tidy = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
@@ -262,6 +267,20 @@ function validateProfile(body = {}) {
     else value.bio = tidy(body.bio, 200) || null;
   }
   if ('city' in body) value.city = tidy(body.city, 60) || null;
+  if ('country' in body) {
+    if (body.country && !prefs.COUNTRIES.includes(body.country)) errors.country = 'Choose a country from the list.';
+    else value.country = body.country || null;
+  }
+  if ('languages' in body) {
+    const list = Array.isArray(body.languages) ? body.languages : [];
+    if (list.some((l) => !prefs.LANGUAGES.includes(l))) errors.languages = 'Choose languages from the list.';
+    else if (new Set(list).size > prefs.MAX_LANGUAGES) errors.languages = `Pick up to ${prefs.MAX_LANGUAGES} languages.`;
+    else value.languages = JSON.stringify([...new Set(list)]);
+  }
+  if ('gender' in body) {
+    if (body.gender && !GENDERS.includes(body.gender)) errors.gender = 'Choose an option from the list.';
+    else value.gender = body.gender || null;
+  }
   if ('timezone' in body) {
     const tz = tidy(body.timezone, 64);
     if (tz && !validTimezone(tz)) errors.timezone = 'Unknown time zone.';

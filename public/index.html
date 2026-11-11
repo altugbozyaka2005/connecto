@@ -190,6 +190,11 @@
             <p class="form-error" id="activity-error" role="alert"></p>
           </form>
           <p class="or-group">or <button type="button" class="link-btn link-accent" id="start-group-from-prompt">start a group room</button> for this activity</p>
+          <button type="button" class="prefs-line open-prefs" id="prefs-line">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 17v2h6v-2H3ZM3 5v2h10V5H3Zm10 16v-2h8v-2h-8v-2h-2v6h2ZM7 9v2H3v2h4v2h2V9H7Zm14 4v-2H11v2h10Zm-6-4h2V7h4V5h-4V3h-2v6Z"/></svg>
+            <span class="prefs-line-label">Match preferences:</span>
+            <span class="prefs-summary"></span>
+          </button>
           <button type="button" class="bg-entry" id="bg-entry">
             <span class="bg-entry-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z"/></svg>
@@ -220,9 +225,18 @@
             <button class="btn btn-ghost" id="bg-btn" type="button">
               <span class="bg-dot" aria-hidden="true"></span><span id="bg-btn-label">Search in background</span>
             </button>
+            <button class="btn btn-ghost open-prefs" id="filters-btn" type="button">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 17v2h6v-2H3ZM3 5v2h10V5H3Zm10 16v-2h8v-2h-8v-2h-2v6h2ZM7 9v2H3v2h4v2h2V9H7Zm14 4v-2H11v2h10Zm-6-4h2V7h4V5h-4V3h-2v6Z"/></svg>
+              Filters <span class="badge" id="filters-n" hidden></span>
+            </button>
             <button class="btn btn-ghost" id="change-activity-btn" type="button">Change</button>
           </div>
         </div>
+
+        <p class="filter-summary" id="filter-summary" hidden>
+          <span>Showing:</span> <span class="prefs-summary"></span>
+          <button type="button" class="link-btn link-accent open-prefs">Edit</button>
+        </p>
 
         <!-- The playground: explore people and groups; requests you sent show at the top -->
         <div class="playground" id="playground">
@@ -559,7 +573,7 @@
       </button>
       <div class="avatar avatar-lg"></div>
       <div class="match-info">
-        <p class="match-name"><span class="name-text"></span> <span class="pill-friend" hidden>Friend</span> <span class="pill-away" hidden>🕓 Background search</span></p>
+        <p class="match-name"><span class="name-text"></span> <span class="pill-friend" hidden>Friend</span> <span class="pill-away" hidden>🕓 Background search</span> <span class="pill-mode" hidden></span></p>
         <p class="match-meta"></p>
         <p class="match-activity"></p>
         <p class="match-bio"></p>
@@ -576,6 +590,7 @@
     <article class="match-card group-card">
       <button class="match-hit" type="button"></button>
       <div class="group-top">
+        <span class="pill-mode" hidden></span>
         <span class="pill-group">
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5Z"/></svg>
           Group
@@ -659,6 +674,14 @@
         <option value="3">3 people</option>
         <option value="4" selected>4 people</option>
         <option value="5">5 people</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>How will you talk?</span>
+      <select id="create-room-mode">
+        <option value="video">📹 Video</option>
+        <option value="voice">🎙 Voice only</option>
+        <option value="chat">💬 Text chat only</option>
       </select>
     </label>
     <p class="form-error" role="alert"></p>
@@ -748,6 +771,65 @@
     </form>
   </dialog>
 
+  <!-- Match preferences -->
+  <dialog class="dialog dialog-wide" id="prefs-dialog" aria-labelledby="prefs-title">
+    <h3 id="prefs-title">Match preferences</h3>
+    <p class="form-intro">Who you’d like to meet and how. Matching works both ways: you see people who fit your filters, and whose filters you fit.</p>
+    <section class="pref-group">
+      <h4>Gender</h4>
+      <div class="pref-opts" data-key="genders"></div>
+    </section>
+    <section class="pref-group">
+      <h4>Age</h4>
+      <div class="pref-opts" data-key="ages"></div>
+    </section>
+    <section class="pref-group">
+      <h4>Country</h4>
+      <div class="pref-opts" data-key="countries"></div>
+      <select class="pref-more" data-key="countries" aria-label="Add a country"></select>
+    </section>
+    <section class="pref-group">
+      <h4>Language</h4>
+      <div class="pref-opts" data-key="languages"></div>
+      <select class="pref-more" data-key="languages" aria-label="Add a language"></select>
+    </section>
+    <section class="pref-group">
+      <h4>How you’re up for talking</h4>
+      <div class="pref-opts" data-key="modes"></div>
+      <p class="hint">A call uses the richest option you both picked: video, then voice, then chat.</p>
+    </section>
+    <details class="pref-about" id="pref-about">
+      <summary>About you <span class="pref-about-summary" id="pref-about-summary"></span></summary>
+      <p class="hint">Other people’s filters check these. If you leave one empty, people filtering on it won’t see you.</p>
+      <div class="pref-about-grid">
+        <label class="field">
+          <span>Gender</span>
+          <select id="about-gender">
+            <option value="">Prefer not to say</option>
+            <option value="woman">Woman</option>
+            <option value="man">Man</option>
+            <option value="nonbinary">Non-binary</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Country</span>
+          <select id="about-country"></select>
+        </label>
+      </div>
+      <div class="field">
+        <span>Languages you speak <em>(up to 5)</em></span>
+        <div class="pref-opts" id="about-languages"></div>
+        <select class="pref-more" id="about-languages-more" aria-label="Add a language you speak"></select>
+      </div>
+    </details>
+    <p class="form-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" id="prefs-reset">Reset filters</button>
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+      <button type="button" class="btn btn-primary" id="prefs-save">Save</button>
+    </div>
+  </dialog>
+
   <!-- Friends -->
   <dialog class="dialog" id="friends-dialog" aria-labelledby="friends-title">
     <h3 id="friends-title">Friends</h3>
@@ -799,6 +881,7 @@
   </dialog>
 
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/prefs-data.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
