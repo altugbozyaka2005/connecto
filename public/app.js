@@ -1587,6 +1587,11 @@
     $('#filters-n').textContent = n;
     $('#filters-n').hidden = !n;
     $('#filter-summary').hidden = !n;
+    $('#prompt-filters-n').textContent = n;
+    $('#prompt-filters-n').hidden = !n;
+    $('#prompt-filter').classList.toggle('is-on', !!n);
+    $('#prompt-filter').title = `Match preferences: ${text}`;
+    $('#prefs-line').hidden = !n;
   }
 
   function showModePill(card, mode) {

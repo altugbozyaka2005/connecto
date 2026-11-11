@@ -185,14 +185,17 @@
           <form id="activity-form" autocomplete="off">
             <div class="prompt-input">
               <input id="activity-input" type="text" maxlength="140" placeholder="Studying for my calculus exam…" required />
+              <button type="button" class="prompt-filter open-prefs" id="prompt-filter" aria-label="Match preferences" title="Match preferences">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M3 17v2h6v-2H3ZM3 5v2h10V5H3Zm10 16v-2h8v-2h-8v-2h-2v6h2ZM7 9v2H3v2h4v2h2V9H7Zm14 4v-2H11v2h10Zm-6-4h2V7h4V5h-4V3h-2v6Z"/></svg>
+                <span class="badge" id="prompt-filters-n" hidden></span>
+              </button>
               <button class="btn btn-primary" type="submit">Find people</button>
             </div>
             <p class="form-error" id="activity-error" role="alert"></p>
           </form>
           <p class="or-group">or <button type="button" class="link-btn link-accent" id="start-group-from-prompt">start a group room</button> for this activity</p>
-          <button type="button" class="prefs-line open-prefs" id="prefs-line">
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 17v2h6v-2H3ZM3 5v2h10V5H3Zm10 16v-2h8v-2h-8v-2h-2v6h2ZM7 9v2H3v2h4v2h2V9H7Zm14 4v-2H11v2h10Zm-6-4h2V7h4V5h-4V3h-2v6Z"/></svg>
-            <span class="prefs-line-label">Match preferences:</span>
+          <button type="button" class="prefs-line open-prefs" id="prefs-line" hidden>
+            <span class="prefs-line-label">Filters on:</span>
             <span class="prefs-summary"></span>
           </button>
           <button type="button" class="bg-entry" id="bg-entry">
